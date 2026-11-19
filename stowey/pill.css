@@ -19,7 +19,9 @@
 
 /* The pill wears the opposite of the Mac's mode, so it stands out: dark glass
    with white parts in light mode, light glass with dark parts in dark mode.
-   `stowey_mac.rs` dresses the glass the same way. */
+   `stowey_mac.rs` dresses the glass and reports which it is; the script puts
+   that on the page as `data-pill`. A media query would not do: it follows
+   the app's own theme, not the Mac's. */
 .scard {
   --s-accent: #ffffff;
   --s-accent-soft: rgba(255, 255, 255, 0.3);
@@ -40,21 +42,19 @@
   background: var(--g-solid);
   box-shadow: var(--g-drop);
 }
-@media (prefers-color-scheme: dark) {
-  .scard {
-    --s-accent: #0d0d0d;
-    --s-accent-soft: rgba(13, 13, 13, 0.2);
-    --s-muted: rgba(13, 13, 13, 0.8);
-    --s-faint: rgba(13, 13, 13, 0.56);
-    --s-hair: rgba(13, 13, 13, 0.1);
-    --color-text: #0d0d0d;
-    --g-solid: rgba(246, 246, 248, 0.97);
-    --g-tint: linear-gradient(180deg, rgba(255, 255, 255, 0.44) 0%, rgba(255, 255, 255, 0.22) 100%);
-    --g-rim: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.42) 28%, rgba(255, 255, 255, 0.14) 60%, rgba(255, 255, 255, 0.82) 100%);
-    --g-inner: inset 0 1px 1px rgba(255, 255, 255, 0.6), inset 0 -5px 8px -5px rgba(255, 255, 255, 0.5);
-    --g-drop: 0 8px 18px -6px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.18);
-    --g-halo: 0 0 0 0.5px rgba(255, 255, 255, 0.55);
-  }
+:root[data-pill="light"] .scard {
+  --s-accent: #0d0d0d;
+  --s-accent-soft: rgba(13, 13, 13, 0.2);
+  --s-muted: rgba(13, 13, 13, 0.8);
+  --s-faint: rgba(13, 13, 13, 0.56);
+  --s-hair: rgba(13, 13, 13, 0.1);
+  --color-text: #0d0d0d;
+  --g-solid: rgba(246, 246, 248, 0.97);
+  --g-tint: linear-gradient(180deg, rgba(255, 255, 255, 0.44) 0%, rgba(255, 255, 255, 0.22) 100%);
+  --g-rim: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.42) 28%, rgba(255, 255, 255, 0.14) 60%, rgba(255, 255, 255, 0.82) 100%);
+  --g-inner: inset 0 1px 1px rgba(255, 255, 255, 0.6), inset 0 -5px 8px -5px rgba(255, 255, 255, 0.5);
+  --g-drop: 0 8px 18px -6px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.18);
+  --g-halo: 0 0 0 0.5px rgba(255, 255, 255, 0.55);
 }
 
 /* Frosted: macOS blurs, this adds the tint and the light on the edge. */

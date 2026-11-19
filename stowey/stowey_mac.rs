@@ -23,11 +23,11 @@ use objc2::runtime::{AnyClass, NSObjectProtocol};
 use objc2::{msg_send, sel, MainThreadMarker};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSApplication, NSColor, NSGlassEffectView, NSRunningApplication, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowOrderingMode,
+    NSColor, NSGlassEffectView, NSRunningApplication, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSWindowOrderingMode,
 };
-use objc2_foundation::{NSArray, NSBundle, NSPoint, NSRect, NSSize};
+use objc2_foundation::{ns_string, NSBundle, NSPoint, NSRect, NSSize, NSUserDefaults};
 
 /// Where the pill is inside the overlay's web view: points from its top left.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -140,15 +140,14 @@ thread_local! {
     static DRESSED: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-/// Is the Mac in dark mode right now?
-fn system_is_dark(mtm: MainThreadMarker) -> bool {
-    // SAFETY: both names are constants AppKit sets up before our code runs.
-    let (light, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
-    let names = NSArray::from_slice(&[light, dark]);
-    NSApplication::sharedApplication(mtm)
-        .effectiveAppearance()
-        .bestMatchFromAppearancesWithNames(&names)
-        .is_some_and(|best| &*best == dark)
+/// Is the Mac itself in dark mode right now? Asked of the user's own setting
+/// and not of this app: the app has a theme of its own, and once that is set,
+/// every view in it reports the app's theme instead of the Mac's.
+/// Safe from any thread.
+pub fn system_is_dark() -> bool {
+    NSUserDefaults::standardUserDefaults()
+        .stringForKey(ns_string!("AppleInterfaceStyle"))
+        .is_some_and(|style| style.to_string() == "Dark")
 }
 
 /// Puts the glass where the pill is. `ns_window` is the overlay's NSWindow.
@@ -181,7 +180,7 @@ pub fn place(ns_window: *mut c_void, frame: Frame) {
         }
 
         // Asked every time, so the pill follows when the Mac changes mode.
-        let dark = !system_is_dark(mtm);
+        let dark = !system_is_dark();
         if DRESSED.get() != Some(dark) {
             glass.dress(dark);
             DRESSED.set(Some(dark));

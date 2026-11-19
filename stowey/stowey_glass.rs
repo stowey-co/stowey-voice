@@ -44,12 +44,14 @@ pub fn stowey_glass_kind() -> String {
     kind.to_string()
 }
 
-/// Puts the glass where the pill now is.
+/// Puts the glass where the pill now is. Answers with what the pill wears,
+/// "dark" or "light", so the web view can colour the bars to match. It is the
+/// opposite of the Mac's mode.
 #[tauri::command]
 #[specta::specta]
-pub fn stowey_glass(app: AppHandle, frame: GlassFrame) {
+pub fn stowey_glass(app: AppHandle, frame: GlassFrame) -> String {
     #[cfg(target_os = "macos")]
-    {
+    let tone = {
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
             let Some(window) = handle.get_webview_window("recording_overlay") else {
@@ -70,9 +72,18 @@ pub fn stowey_glass(app: AppHandle, frame: GlassFrame) {
                 },
             );
         });
-    }
+        if mac::system_is_dark() {
+            "light"
+        } else {
+            "dark"
+        }
+    };
     #[cfg(not(target_os = "macos"))]
-    let _ = (app, frame);
+    let tone = {
+        let _ = (app, frame);
+        "dark"
+    };
+    tone.to_string()
 }
 
 /// Called first thing when the app starts. A copy of the app under an older

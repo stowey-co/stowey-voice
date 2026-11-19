@@ -122,6 +122,24 @@ jobs:
           mkdir -p shots
           sw_vers | tee shots/machine.txt
           system_profiler SPDisplaysDataType 2>/dev/null | grep -E "Resolution|Retina|UI Looks" | tee -a shots/machine.txt || true
+          # Something to see through the glass. The pill sits in the middle of
+          # the bottom edge: left of it a white page with lines of text, right
+          # of it bands of colour.
+          .stowey-venv/bin/python - <<'PY'
+          from PIL import Image, ImageDraw
+          w, h = 1920, 1080
+          picture = Image.new("RGB", (w, h), "white")
+          draw = ImageDraw.Draw(picture)
+          for y in range(0, h, 12):
+              for x in range(40, w // 2 - 6, 46):
+                  draw.rectangle([x, y + 3, x + 36, y + 8], fill="black")
+          colours = ["#ff5f8f", "#ffb36b", "#19e0b3", "#6fb7ff", "#7a5cff", "#101235", "#fff3c4"]
+          for i, x in enumerate(range(w // 2, w, 14)):
+              draw.rectangle([x, 0, x + 13, h], fill=colours[i % len(colours)])
+          picture.save("shots/backdrop.png")
+          PY
+          osascript -e 'tell application "System Events" to tell every desktop to set picture to "'"$PWD"'/shots/backdrop.png"' || echo "could not set the desktop picture"
+          sleep 4
           for mode in light dark; do
             if [ "$mode" = dark ]; then
               defaults write -g AppleInterfaceStyle Dark

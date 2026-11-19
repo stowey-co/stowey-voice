@@ -54,7 +54,13 @@ function report() {
     .join(" ");
   if (key === sent) return;
   sent = key;
-  invoke("stowey_glass", { frame }).catch(() => {});
+  // The answer is what the pill wears, dark or light: the opposite of the
+  // Mac's mode. The stylesheet colours the bars to match.
+  invoke<string>("stowey_glass", { frame })
+    .then((tone) => {
+      document.documentElement.dataset.pill = tone;
+    })
+    .catch(() => {});
 }
 
 // The pill fades and grows over a few hundred milliseconds. Follow it frame
