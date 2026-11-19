@@ -1,6 +1,6 @@
 name: Stowey Voice
 
-# Builds the macOS app and publishes it as a release.
+# Builds the macOS app, tests it and publishes it as a release.
 # Runs when the Stowey overlay changes, or by hand from the Actions tab.
 on:
   workflow_dispatch:
@@ -17,32 +17,25 @@ concurrency:
   group: stowey-voice-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GH_TOKEN: ${{ github.token }}
+
 jobs:
   build:
-    name: Build (${{ matrix.label }} on ${{ matrix.platform }})
+    name: Build (${{ matrix.label }})
+    # Both apps are built on GitHub's Intel Macs. Its Apple silicon Macs are
+    # regularly out of capacity and cancel a job before it starts. macOS 26
+    # carries the Apple Intelligence SDK the cleanup model needs, and
+    # stowey/apply.py lets an Intel Mac build the Apple silicon app with it.
+    runs-on: macos-26-intel
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS 26 carries the Apple Intelligence SDK the cleanup model needs.
-          # GitHub's Apple silicon machines are often out of capacity, so the
-          # Apple silicon app is also built on an Intel machine. Whichever
-          # finishes publishes; the native build wins when both do.
-          - platform: macos-26
-            target: aarch64-apple-darwin
+          - target: aarch64-apple-darwin
             label: apple-silicon
-            replace: "yes"
-          - platform: macos-26-intel
-            target: aarch64-apple-darwin
-            label: apple-silicon
-            replace: "no"
-          - platform: macos-26-intel
-            target: x86_64-apple-darwin
+          - target: x86_64-apple-darwin
             label: intel
-            replace: "yes"
-    runs-on: ${{ matrix.platform }}
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out
         uses: actions/checkout@v5
@@ -59,7 +52,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
-          key: stowey-${{ matrix.platform }}-${{ matrix.target }}
+          key: stowey-macos-26-intel-${{ matrix.target }}
           cache-bin: false
 
       - name: Install frontend dependencies
@@ -91,6 +84,12 @@ jobs:
           echo "Stowey prompt in binary: $(strings -a "$BIN" | grep -c "You are a dictation editor" || true)"
           echo "upstream updater endpoint in bundle: $(grep -rac "cjpais/Handy/releases/latest/download/latest.json" "$APP/Contents" | awk -F: '{s+=$NF} END {print s+0}')"
 
+      # The build machine is Intel, so only the Intel app can be started here.
+      - name: Start the app once
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Stowey Voice.app/Contents/MacOS/handy" --help
+
       - name: Collect the installer
         run: |
           mkdir -p out
@@ -100,11 +99,14 @@ jobs:
       - name: Keep the installer as a build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: stowey-voice-${{ matrix.label }}-built-on-${{ matrix.platform }}
+          name: stowey-voice-${{ matrix.label }}
           path: out/*.dmg
           retention-days: 30
 
-      - name: Publish to the release
+      # Attached to a prerelease first. The Publish job promotes it to the
+      # latest release only once both installers are there and the tests pass,
+      # so the download links never point at a half finished release.
+      - name: Attach to the release
         run: |
           VERSION=$(grep -o '"version": "[^"]*"' src-tauri/tauri.conf.json | head -1 | cut -d'"' -f4)
           TAG="v${VERSION}-stowey.${GITHUB_RUN_NUMBER}"
@@ -113,9 +115,57 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Stowey Voice ${TAG}" \
             --notes-file stowey/RELEASE_NOTES.md \
-            --latest || echo "Release ${TAG} already exists, adding to it."
-          if [ "${{ matrix.replace }}" = "yes" ]; then
-            gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" || echo "The native build already published this installer. Keeping it."
-          fi
+            --prerelease || echo "Release ${TAG} already exists, adding to it."
+          gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
+
+  test:
+    name: Test the Stowey module
+    runs-on: macos-26-intel
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: stowey-macos-26-intel-tests
+          cache-bin: false
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Apply the Stowey overlay
+        run: |
+          python3 -m venv .stowey-venv
+          .stowey-venv/bin/pip install --quiet pillow
+          .stowey-venv/bin/python stowey/apply.py
+
+      - name: Run the tests
+        working-directory: src-tauri
+        run: cargo test --lib stowey
+
+  publish:
+    name: Publish
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Promote the release
+        run: |
+          VERSION=$(grep -o '"version": "[^"]*"' src-tauri/tauri.conf.json | head -1 | cut -d'"' -f4)
+          TAG="v${VERSION}-stowey.${GITHUB_RUN_NUMBER}"
+          ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          echo "$ASSETS"
+          for NAME in Stowey-Voice-apple-silicon.dmg Stowey-Voice-intel.dmg; do
+            echo "$ASSETS" | grep -qx "$NAME" || { echo "Missing ${NAME}. Not promoting ${TAG}."; exit 1; }
+          done
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest

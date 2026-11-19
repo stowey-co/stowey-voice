@@ -44,14 +44,14 @@ The fork is a thin overlay. Upstream's sources stay untouched in git. Everything
 |---|---|
 | `stowey/stowey.rs` | The native module: defaults, context, prompt, house style gate, with tests |
 | `stowey/apply.py` | Applies the overlay to a clean checkout: wires the module in, renames the app, draws the icons, sets the palette and typeface |
-| `.github/workflows/stowey-voice.yml` | Builds the app on GitHub's macOS runners and publishes a release |
+| `.github/workflows/stowey-voice.yml` | Builds both apps on GitHub's Mac build machines, tests the module and publishes a release |
 | `README.md` | This file |
 
 Every patch in `apply.py` asserts that its anchor still exists. If an upstream change breaks one, the build fails loudly instead of silently shipping stock behaviour.
 
 ### Build a new version
 
-Push a change under `stowey/`, or run the Stowey Voice workflow by hand from the Actions tab. About half an hour later a new release appears with both installers attached.
+Push a change under `stowey/`, or run the Stowey Voice workflow by hand from the Actions tab. The build takes up to an hour. The new release replaces the latest one only when both installers are attached and the tests pass, so the download links above never break.
 
 ### Pull in a new Handy release
 

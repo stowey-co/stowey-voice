@@ -653,6 +653,21 @@ mod tests {
         assert_eq!(clean_label(&"x".repeat(300)).chars().count(), 120);
     }
 
+    /// On a Mac this makes the real Accessibility and Launch Services calls.
+    /// Without the Accessibility permission they may come back empty, which is
+    /// fine. They must never crash.
+    #[test]
+    fn focus_never_panics() {
+        let (app, window) = focus();
+        if let Some(app) = app {
+            assert!(!app.is_empty());
+        }
+        if let Some(window) = window {
+            assert!(window.len() <= 4096);
+        }
+        assert!(!with_context("before ${context} after").contains("${context}"));
+    }
+
     #[test]
     fn code_apps_are_recognised() {
         assert!(is_code_app("Terminal"));

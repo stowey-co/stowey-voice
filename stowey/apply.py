@@ -143,6 +143,12 @@ def patch_rust() -> None:
     patch(tray, 'format!("Handy v{}"', f'format!("{NAME} v{{}}"')
 
     patch(
+        src / "cli.rs",
+        'about = "Handy - Speech to Text"',
+        f'about = "{NAME}, speech to text"',
+    )
+
+    patch(
         src / "llm_client.rs",
         'headers.insert("X-Title", HeaderValue::from_static("Handy"));',
         f'headers.insert("X-Title", HeaderValue::from_static("{NAME}"));',
