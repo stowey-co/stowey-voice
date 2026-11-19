@@ -27,26 +27,40 @@ Steps 2 and 3 are needed once per download, because the build is not yet signed 
 ## What it does that stock Handy does not
 
 1. **Cleanup is on from the first dictation.** The normal shortcut cleans the text. No second shortcut, no setup.
-2. **It knows where you are typing.** The app and window in focus are handed to the cleanup model, so a chat message reads like a chat message and an email reads like an email.
-3. **It removes what you did not mean to write.** Filler words, repeats and self corrections go. "At three, no wait, at four" becomes "at 4".
-4. **Stowey house style, enforced.** No dashes, no exclamation marks, British English. A deterministic gate runs after the model, so a stray dash never reaches the page. Document numbers, SKUs, dates, URLs and command flags keep their own characters. The gate stays out of terminals and code editors.
-5. **It knows the name Stowey.** The speech model and the cleanup model are both told how it is spelt, next to your own custom words. Names of colleagues, customers and suppliers are not in this public code: add them once under Settings, Custom Words, and they stay on your Mac.
-6. **It is built to be quick.** The speech model loads when the app starts and stays loaded. The cleanup model is warmed up while you are still speaking. A short sentence with nothing to clean, no filler, no repeat, no correction, skips the model and is typed at once.
-7. **It picks the better microphone.** A Bluetooth headset such as AirPods needs a second or more to switch into call mode and then sends telephone quality sound, which costs the first words and the accuracy. When the Mac's input is a Bluetooth headset and no microphone is chosen in Settings, Stowey Voice records from the Mac's own microphone instead, as long as the lid is open. Choose a microphone under Settings to overrule this.
-8. **It never updates itself into stock Handy.** New versions come from this repository only.
+2. **It works while you talk.** The speech is decoded at every pause, during the dictation. When you let go of the key, only the words since your last pause are left to do.
+3. **It only makes you wait where an editor earns it.** A cleanup model runs for an email, and for a text in which you corrected yourself, counted out a list or asked for a new paragraph. There, "at three, no wait, at four" becomes "at 4". Everything else is tidied by rule and typed at once: a throat clearing "So", an aside like "you know", a small word said twice.
+4. **It knows where you are typing.** The app and window in focus decide the above. A chat with an AI is typed as spoken, because its reader copes. A terminal or code editor gets your words untouched.
+5. **Stowey house style, enforced.** No dashes, no exclamation marks, British English. A deterministic gate runs last, so a stray dash never reaches the page. Document numbers, SKUs, dates, URLs and command flags keep their own characters. The gate stays out of terminals and code editors.
+6. **It knows your words.** The speech model is told how Stowey is spelt, next to your custom words and your private word file. See below.
+7. **It uses the Mac's own microphone.** It opens fastest. A Bluetooth headset needs a second or more to switch into call mode and then sends telephone quality sound, and a display's microphone takes about half a second to open each time. With the lid closed, or with a microphone chosen under Settings, yours is used instead.
+8. **It tells you when it listens.** A soft sound plays once the microphone really is recording, and another when you let go. Switch them off under Settings, General, Audio Feedback.
+9. **The pill is glass.** Monochrome, with a light edge and a shadow. Its look lives in `stowey/pill.css`.
+10. **It never updates itself into stock Handy.** New versions come from this repository only.
 
-Cleanup uses Apple Intelligence, on the Mac itself. That needs an Apple silicon Mac on macOS 26 or newer with Apple Intelligence switched on. On other Macs dictation still works and the house style gate still runs, without the model. Any provider Handy supports can be selected instead under Settings, Post Processing.
+The cleanup model is Apple Intelligence, on the Mac itself. That needs an Apple silicon Mac on macOS 26 or newer with Apple Intelligence switched on. On other Macs everything else still works. Any provider Handy supports can be selected instead under Settings, Post Process.
 
-Switching Post Processing off in Settings switches off both the model and the gate.
+Switching Post Process off in Settings switches off the model, the tidy rules and the gate.
+
+## Your private word file
+
+Names of colleagues, customers and suppliers are not in this public code. They go into a plain text file on your Mac:
+
+`~/Library/Logs/co.stowey.voice/vocabulary.txt`
+
+One name or term per line. A line `said => written` is a replacement: say the left side, and the right side is typed. Lines starting with `#` are notes. The app reads the file again whenever it changes. The same file is also read from `~/Library/Application Support/co.stowey.voice/`.
+
+Ask your Claude to build it from the names you use most. It can write to the first folder once you share it.
 
 ## How this repository works
 
-The fork is a thin overlay. Upstream's sources stay untouched in git. Everything Stowey adds lives in four places:
+The fork is a thin overlay. Upstream's sources stay untouched in git. Everything Stowey adds lives in six places:
 
 | Path | What it is |
 |---|---|
-| `stowey/stowey.rs` | The native module: defaults, context, prompt, vocabulary, microphone choice, speed, house style gate, with tests |
-| `stowey/apply.py` | Applies the overlay to a clean checkout: wires the module in, adds the warm up call to the Apple Intelligence bridge, renames the app, draws the icons, sets the palette and typeface |
+| `stowey/stowey.rs` | The native module: defaults, destinations, cleanup policy, tidy rules, prompt, vocabulary, microphone choice, house style gate, with tests |
+| `stowey/stowey_live.rs` | Cuts a live recording at every pause so it is decoded while you talk, and joins the pieces, with tests |
+| `stowey/pill.css` | The look of the recording pill |
+| `stowey/apply.py` | Applies the overlay to a clean checkout: wires the modules in, adds the warm up call to the Apple Intelligence bridge, draws the two sounds and the icons, renames the app, sets the palette and typeface |
 | `.github/workflows/stowey-voice.yml` | Builds both apps on GitHub's Mac build machines, tests the module and publishes a release |
 | `README.md` | This file |
 

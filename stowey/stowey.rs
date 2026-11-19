@@ -10,22 +10,26 @@
 //! 3. A default prompt that removes fillers, repeats and self corrections.
 //! 4. A deterministic house style gate that runs after the model: no dashes,
 //!    no exclamation marks. A model slips now and then. This does not.
-//! 5. Speed: the speech model loads at launch and stays loaded, the cleanup
-//!    model is warmed up while the user is still speaking, and a short
-//!    dictation with nothing to clean skips the model altogether.
-//! 6. Vocabulary: Stowey's own names go to the speech model and to the
-//!    cleanup model along with the user's custom words, so they are spelt
-//!    right.
-//! 7. Microphone: when the system input is a Bluetooth headset and nobody
-//!    chose a microphone, the Mac's own microphone is used. A headset needs
-//!    a second or more to switch into call mode and sends telephone quality
-//!    sound, which costs both the first words and the accuracy. Not with the
-//!    lid closed: a closed MacBook's microphone is switched off.
+//! 5. Speed: the speech model loads at launch and stays loaded. The cleanup
+//!    model only runs where an editor earns its wait: in an email, or when
+//!    the speaker corrected themselves or dictated a list. Everything else
+//!    is tidied by rule and typed at once. Where the model does run, it is
+//!    warmed up while the user is still speaking. The speech itself is
+//!    decoded during the dictation: see `stowey_live.rs`.
+//! 6. Vocabulary: Stowey's own names, the user's custom words and a private
+//!    word file on each Mac go to the speech model and to the cleanup model.
+//! 7. Microphone: when nobody chose a microphone, the Mac's own microphone
+//!    is used. It opens fastest, and a Bluetooth headset needs a second or
+//!    more to switch into call mode and then sends telephone quality sound.
+//!    Not with the lid closed: a closed MacBook's microphone is switched off.
+//! 8. A sound on press and on release, on from the first start.
 
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
-    get_settings, AppSettings, LLMPrompt, ModelUnloadTimeout, APPLE_INTELLIGENCE_PROVIDER_ID,
+    get_settings, AppSettings, LLMPrompt, ModelUnloadTimeout, SoundTheme,
+    APPLE_INTELLIGENCE_PROVIDER_ID,
 };
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -56,20 +60,171 @@ ${output}"#;
 /// and by sound "stay" and "study" are both close enough to "Stowey".
 ///
 /// This file is public. Names of colleagues, customers and suppliers do not
-/// belong here; each person adds those under Settings, Custom Words, where
-/// they stay on that Mac.
+/// belong here; they go into the private word file below, or under Settings,
+/// Custom Words. Both stay on that Mac.
 const VOCABULARY: [&str; 2] = ["Stowey", "Chemaly"];
 
-/// The user's custom words first, then the house names they did not list.
-/// Called by the transcription manager for speech models that take vocabulary.
+/// More words than this and the speech model starts hearing them everywhere.
+const VOCABULARY_MAX: usize = 100;
+
+/// The user's custom words first, then their private word file, then the
+/// house names. Called by the transcription manager for speech models that
+/// take vocabulary.
 pub fn with_house_vocabulary(custom_words: &[String]) -> Vec<String> {
-    let mut words = custom_words.to_vec();
-    for name in VOCABULARY {
-        if !words.iter().any(|known| known.eq_ignore_ascii_case(name)) {
-            words.push(name.to_string());
+    merge_vocabulary(custom_words, &personal().words)
+}
+
+fn merge_vocabulary(custom_words: &[String], personal_words: &[String]) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let house = VOCABULARY.iter().map(|name| name.to_string());
+    for word in custom_words
+        .iter()
+        .cloned()
+        .chain(personal_words.iter().cloned())
+        .chain(house)
+    {
+        let known = words
+            .iter()
+            .any(|known| known.to_lowercase() == word.to_lowercase());
+        if !known && words.len() < VOCABULARY_MAX {
+            words.push(word);
         }
     }
     words
+}
+
+// ---------------------------------------------------------------------------
+// The private word file
+// ---------------------------------------------------------------------------
+
+/// A plain text file of names and terms, one per line, that never leaves the
+/// Mac. A line `said => written` is a replacement instead: whenever the left
+/// side is dictated, the right side is typed. Lines starting with `#` are
+/// notes. The file is read from the app's data folder and from its log
+/// folder, and read again whenever it changes.
+const PERSONAL_FILE: &str = "vocabulary.txt";
+const PERSONAL_LINE_MAX: usize = 80;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Personal {
+    words: Vec<String>,
+    replacements: Vec<(String, String)>,
+}
+
+static PERSONAL: Mutex<Option<Personal>> = Mutex::new(None);
+
+fn personal() -> Personal {
+    PERSONAL
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_default()
+}
+
+fn parse_personal(text: &str, into: &mut Personal) {
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.chars().count() > PERSONAL_LINE_MAX * 4
+        {
+            continue;
+        }
+        if let Some((said, written)) = line.split_once("=>") {
+            let (said, written) = (said.trim(), written.trim());
+            if !said.is_empty() && !written.is_empty() {
+                into.replacements
+                    .push((said.to_string(), written.to_string()));
+            }
+            continue;
+        }
+        if line.chars().count() <= PERSONAL_LINE_MAX {
+            into.words.push(line.to_string());
+        }
+    }
+}
+
+fn personal_places(app: &AppHandle) -> Vec<PathBuf> {
+    let mut places = Vec::new();
+    if let Ok(folder) = crate::portable::app_data_dir(app) {
+        places.push(folder.join(PERSONAL_FILE));
+    }
+    if let Ok(folder) = app.path().app_log_dir() {
+        places.push(folder.join(PERSONAL_FILE));
+    }
+    places
+}
+
+/// When each file last changed, or `None` where there is none.
+fn personal_stamps(places: &[PathBuf]) -> Vec<Option<std::time::SystemTime>> {
+    places
+        .iter()
+        .map(|place| {
+            std::fs::metadata(place)
+                .and_then(|file| file.modified())
+                .ok()
+        })
+        .collect()
+}
+
+fn load_personal(places: &[PathBuf]) {
+    let mut found = Personal::default();
+    for place in places {
+        if let Ok(text) = std::fs::read_to_string(place) {
+            parse_personal(&text, &mut found);
+        }
+    }
+    log::info!(
+        "Stowey Voice private word file: {} words, {} replacements",
+        found.words.len(),
+        found.replacements.len()
+    );
+    if let Ok(mut slot) = PERSONAL.lock() {
+        *slot = Some(found);
+    }
+}
+
+/// Types the written form wherever the said form was dictated, whatever its
+/// capitals, as long as it stands as whole words.
+fn apply_replacements(text: &str, replacements: &[(String, String)]) -> String {
+    let mut text = text.to_string();
+    for (said, written) in replacements {
+        let needle: Vec<char> = said.to_lowercase().chars().collect();
+        if needle.is_empty() {
+            continue;
+        }
+        let source: Vec<char> = text.chars().collect();
+        let lowered: Vec<char> = source
+            .iter()
+            .map(|c| c.to_lowercase().next().unwrap_or(*c))
+            .collect();
+        let mut out = String::with_capacity(text.len());
+        let mut index = 0;
+        while index < source.len() {
+            let end = index + needle.len();
+            let whole = end <= source.len()
+                && lowered[index..end] == needle[..]
+                && (index == 0 || !source[index - 1].is_alphanumeric())
+                && (end == source.len() || !source[end].is_alphanumeric());
+            if whole {
+                let opens_sentence = out
+                    .trim_end()
+                    .chars()
+                    .last()
+                    .is_none_or(|c| matches!(c, '.' | '!' | '?'));
+                let prose = !written.contains(['@', '/']) && written.contains(' ');
+                if opens_sentence && prose && source[index].is_uppercase() {
+                    out.push_str(&capitalised(written));
+                } else {
+                    out.push_str(written);
+                }
+                index = end;
+            } else {
+                out.push(source[index]);
+                index += 1;
+            }
+        }
+        text = out;
+    }
+    text
 }
 
 // ---------------------------------------------------------------------------
@@ -89,12 +244,16 @@ pub fn default_selected_prompt_id() -> Option<String> {
 }
 
 /// Bump when `seed` changes. An install applies each version once.
-const SEED_VERSION: u32 = 1;
+const SEED_VERSION: u32 = 2;
 const SEED_FILE: &str = "stowey-seed";
 static SEEDED: AtomicBool = AtomicBool::new(false);
 
 /// Stowey's settings on top of whatever is stored. Safe to run twice.
 fn seed(settings: &mut AppSettings) {
+    // A sound on press, once the microphone really is listening, and one on
+    // release. `stowey/apply.py` puts Stowey's own two sounds in this theme.
+    settings.audio_feedback = true;
+    settings.sound_theme = SoundTheme::Pop;
     // Keep the speech model in memory: reloading it after a pause costs seconds.
     if matches!(settings.model_unload_timeout, ModelUnloadTimeout::Min5) {
         settings.model_unload_timeout = ModelUnloadTimeout::Never;
@@ -429,9 +588,126 @@ fn context_line(app: Option<&str>, window: Option<&str>) -> String {
     line
 }
 
+/// What kind of place the text is going to. It decides how much cleaning the
+/// text gets, and whether a model is worth waiting for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Destination {
+    /// A chat with an AI model. The reader copes with spoken language, so
+    /// nothing is worth a wait here.
+    AiChat,
+    /// An email. Greeting, paragraphs and sign off matter, so the cleanup
+    /// model always gets a look.
+    Email,
+    /// A terminal or code editor: the text goes out exactly as spoken.
+    Code,
+    Other,
+}
+
+const AI_NAMES: [&str; 14] = [
+    "claude",
+    "claude code",
+    "chatgpt",
+    "gemini",
+    "google gemini",
+    "google ai studio",
+    "perplexity",
+    "copilot",
+    "microsoft copilot",
+    "grok",
+    "le chat",
+    "deepseek",
+    "poe",
+    "notebooklm",
+];
+
+const MAIL_APPS: [&str; 9] = [
+    "mail",
+    "spark",
+    "outlook",
+    "microsoft outlook",
+    "superhuman",
+    "airmail",
+    "mimestream",
+    "thunderbird",
+    "proton mail",
+];
+
+const BROWSERS: [&str; 13] = [
+    "google chrome",
+    "chrome",
+    "safari",
+    "arc",
+    "firefox",
+    "microsoft edge",
+    "brave browser",
+    "dia",
+    "zen",
+    "orion",
+    "vivaldi",
+    "opera",
+    "comet",
+];
+
+/// A browser window is named after its page, as in `Inbox - Stowey Mail -
+/// Google Chrome`. The parts between the separators say what the page is.
+fn title_parts(window: &str) -> Vec<String> {
+    let mut title = window.to_lowercase();
+    for separator in [" \u{2013} ", " \u{2014} ", " | ", " \u{b7} "] {
+        title = title.replace(separator, " - ");
+    }
+    title
+        .split(" - ")
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn destination_of(app: Option<&str>, window: Option<&str>) -> Destination {
+    let app = app.map(|app| app.trim().to_lowercase()).unwrap_or_default();
+    if app.is_empty() {
+        return Destination::Other;
+    }
+    if is_code_app(&app) {
+        return Destination::Code;
+    }
+    if AI_NAMES.contains(&app.as_str()) {
+        return Destination::AiChat;
+    }
+    if MAIL_APPS.contains(&app.as_str()) {
+        return Destination::Email;
+    }
+    if BROWSERS.contains(&app.as_str()) {
+        let parts = title_parts(window.unwrap_or_default());
+        if parts.iter().any(|part| AI_NAMES.contains(&part.as_str())) {
+            return Destination::AiChat;
+        }
+        let mail = parts.iter().any(|part| {
+            part == "mail" || part == "gmail" || part.ends_with(" mail") || part.contains("outlook")
+        });
+        if mail {
+            return Destination::Email;
+        }
+    }
+    Destination::Other
+}
+
 /// The context captured when the dictation started, waiting for its cleanup.
 static WARM_CONTEXT: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+/// Where that dictation is going. Read, not taken: several steps ask.
+static DESTINATION: Mutex<Option<(Instant, Destination)>> = Mutex::new(None);
 const CONTEXT_MAX_AGE: Duration = Duration::from_secs(600);
+
+fn destination() -> Destination {
+    if let Ok(slot) = DESTINATION.lock() {
+        if let Some((captured, destination)) = *slot {
+            if captured.elapsed() < CONTEXT_MAX_AGE {
+                return destination;
+            }
+        }
+    }
+    let (app, window) = focus();
+    destination_of(app.as_deref(), window.as_deref())
+}
 
 fn take_context() -> String {
     if let Ok(mut slot) = WARM_CONTEXT.lock() {
@@ -481,48 +757,73 @@ pub fn fill_prompt(prompt: &str, settings: &AppSettings) -> String {
 // Speed
 // ---------------------------------------------------------------------------
 
-/// Longer than this and the text goes to the model whatever it looks like.
-const FAST_PATH_WORDS: usize = 12;
-
 /// Sounds a speaker makes while thinking. English, German and French. The
 /// app strips most of them before the text gets here; these are the rest.
 const FILLERS: [&str; 12] = [
     "uh", "uhm", "umm", "erm", "hmm", "hm", "mhm", "äh", "ähm", "öh", "euh", "ehm",
 ];
 
-/// Words that tend to announce a correction, a list or a layout. Seeing one
-/// only means the model gets a look; it never changes the text by itself.
-const CUES: [&str; 30] = [
-    "mean",
-    "meant",
-    "wait",
-    "sorry",
-    "actually",
-    "rather",
-    "scratch",
-    "correction",
-    "instead",
-    "no",
-    "nein",
-    "meine",
-    "quatsch",
-    "sondern",
-    "korrektur",
-    "entschuldigung",
-    "non",
-    "pardon",
-    "plutôt",
-    "enfin",
-    "first",
-    "firstly",
-    "second",
-    "erstens",
-    "zweitens",
-    "premièrement",
-    "bullet",
-    "line",
-    "paragraph",
-    "absatz",
+/// A speaker taking something back. Each is matched as whole words.
+const CORRECTIONS: [&str; 17] = [
+    " no wait ",
+    " wait no ",
+    " i mean ",
+    " i meant ",
+    " scratch that ",
+    " or rather ",
+    " actually no ",
+    " no actually ",
+    " let me rephrase ",
+    " correction ",
+    " sorry i ",
+    " ich meine ",
+    " besser gesagt ",
+    " quatsch ",
+    " korrektur ",
+    " je veux dire ",
+    " pardon ",
+];
+
+/// The same, where only the commas give it away: "on Friday, no, on Monday".
+const COMMA_CORRECTIONS: [&str; 10] = [
+    ", no,",
+    ", sorry,",
+    ", wait,",
+    ", rather,",
+    ", nein,",
+    ", non,",
+    ". no,",
+    "? no,",
+    ". sorry,",
+    ". wait,",
+];
+
+/// A speaker asking for a layout.
+const LAYOUT: [&str; 8] = [
+    " bullet ",
+    " bullet point ",
+    " new line ",
+    " next line ",
+    " new paragraph ",
+    " neue zeile ",
+    " neuer absatz ",
+    " nouvelle ligne ",
+];
+
+/// A list being counted out needs one of each.
+const FIRSTS: [&str; 5] = [
+    " first ",
+    " firstly ",
+    " number one ",
+    " erstens ",
+    " premièrement ",
+];
+const SECONDS: [&str; 5] = [
+    " second ",
+    " secondly ",
+    " number two ",
+    " zweitens ",
+    " deuxièmement ",
 ];
 
 /// How a message opens when it will want its greeting on its own line.
@@ -530,47 +831,263 @@ const GREETINGS: [&str; 9] = [
     "hi", "hello", "hey", "dear", "hallo", "liebe", "lieber", "bonjour", "salut",
 ];
 
-/// True when the transcript can go out as the speech model wrote it.
-///
-/// The cleanup model costs a second or two, and most short dictations hold
-/// nothing for it to do. So one to three words always skip it, and a short
-/// sentence skips it unless something in it looks like work: a filler, a
-/// word said twice, a correction, a list or a greeting. The house style gate
-/// runs either way.
-pub fn skip_cleanup(transcription: &str) -> bool {
-    let bare = |word: &str| {
-        word.trim_matches(|c: char| !c.is_alphanumeric())
-            .to_lowercase()
-    };
-    let words: Vec<String> = transcription
-        .split_whitespace()
+/// Words people double on purpose.
+const EMPHATIC: [&str; 14] = [
+    "very", "really", "no", "so", "bye", "had", "that", "ha", "oh", "yes", "yeah", "okay", "ok",
+    "now",
+];
+
+fn bare(word: &str) -> String {
+    word.trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase()
+}
+
+fn bare_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
         .map(bare)
         .filter(|word| !word.is_empty())
-        .collect();
-    if words.len() < 4 {
-        return true;
-    }
+        .collect()
+}
+
+/// True when the text holds work that rules cannot do: a correction to
+/// resolve, a list or layout to build, a hesitation or a repeat to judge.
+fn needs_editor(text: &str) -> bool {
+    let tidied = tidy(text);
+    let words = bare_words(&tidied);
+    let flat = format!(" {} ", words.join(" "));
+    let lowered = tidied.to_lowercase();
+
     // "um" is a filler in English and a preposition in German ("um zehn").
     // Set off by punctuation it is the filler.
-    let hesitates = transcription
+    let hesitates = tidied
         .split_whitespace()
-        .any(|word| bare(word) == "um" && word.ends_with(|c: char| !c.is_alphanumeric()));
-    if hesitates {
-        return false;
+        .any(|word| bare(word) == "um" && word.ends_with(|c: char| !c.is_alphanumeric()))
+        || words.iter().any(|word| FILLERS.contains(&word.as_str()));
+    let corrects = CORRECTIONS.iter().any(|cue| flat.contains(cue))
+        || COMMA_CORRECTIONS.iter().any(|cue| lowered.contains(cue));
+    let lays_out = LAYOUT.iter().any(|cue| flat.contains(cue))
+        || (FIRSTS.iter().any(|cue| flat.contains(cue))
+            && SECONDS.iter().any(|cue| flat.contains(cue)));
+    let greets = words.len() >= 6
+        && words
+            .first()
+            .is_some_and(|word| GREETINGS.contains(&word.as_str()));
+    let repeats = words
+        .windows(2)
+        .any(|pair| pair[0] == pair[1] && !EMPHATIC.contains(&pair[0].as_str()));
+    hesitates || corrects || lays_out || greets || repeats
+}
+
+fn skips(transcription: &str, destination: Destination) -> bool {
+    if bare_words(transcription).len() < 4 {
+        return true;
     }
-    if words.len() > FAST_PATH_WORDS {
-        return false;
+    match destination {
+        Destination::AiChat | Destination::Code => true,
+        Destination::Email => false,
+        Destination::Other => !needs_editor(transcription),
     }
-    if GREETINGS.contains(&words[0].as_str()) {
-        return false;
+}
+
+/// True when the transcript goes out without the cleanup model.
+///
+/// The model costs two to three seconds on a normal dictation, and most
+/// dictations hold nothing only a model can do. So it runs for an email, and
+/// for a text with a correction, a list or a hesitation in it. A chat with an
+/// AI, a terminal, and everything that reads cleanly as spoken is typed at
+/// once. `tidy` and the house style gate run either way.
+pub fn skip_cleanup(transcription: &str) -> bool {
+    skips(transcription, destination())
+}
+
+// ---------------------------------------------------------------------------
+// Tidy: what rules can clean without a model
+// ---------------------------------------------------------------------------
+
+/// Small words a speaker doubles by accident: "the the", "I I think".
+const STUTTERS: [&str; 26] = [
+    "i", "we", "you", "they", "he", "she", "it", "the", "a", "an", "to", "of", "in", "on", "at",
+    "for", "and", "but", "or", "are", "was", "my", "your", "our", "with", "if",
+];
+
+/// What may follow a sentence opening "So" that only clears the throat. "So
+/// far", "so that" and "so much" are not on it.
+const AFTER_SO: [&str; 58] = [
+    "i",
+    "i'm",
+    "i've",
+    "i'll",
+    "i'd",
+    "we",
+    "we're",
+    "we've",
+    "we'll",
+    "you",
+    "you're",
+    "the",
+    "this",
+    "there",
+    "there's",
+    "it",
+    "it's",
+    "if",
+    "when",
+    "for",
+    "in",
+    "on",
+    "my",
+    "our",
+    "your",
+    "let's",
+    "let",
+    "can",
+    "could",
+    "would",
+    "please",
+    "now",
+    "basically",
+    "here",
+    "here's",
+    "what",
+    "how",
+    "why",
+    "first",
+    "next",
+    "then",
+    "as",
+    "with",
+    "to",
+    "a",
+    "an",
+    "they",
+    "they're",
+    "he",
+    "she",
+    "one",
+    "all",
+    "each",
+    "every",
+    "these",
+    "those",
+    "just",
+    "maybe",
+];
+
+fn ends_sentence(token: &str) -> bool {
+    token.ends_with(['.', '!', '?', ':', '\u{2026}'])
+}
+
+fn capitalised(token: &str) -> String {
+    let mut done = false;
+    token
+        .chars()
+        .flat_map(|c| {
+            if !done && c.is_alphabetic() {
+                done = true;
+                c.to_uppercase().collect::<Vec<char>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+/// A word with nothing attached but, at most, a comma after it.
+fn is_plain(token: &str) -> bool {
+    let word = token.strip_suffix(',').unwrap_or(token);
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '\'' || c == '\u{2019}')
+}
+
+fn tidy_line(line: &str) -> String {
+    let tokens: Vec<&str> = line.split(' ').filter(|token| !token.is_empty()).collect();
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    // The next word kept begins a sentence, and needs a capital.
+    let mut at_start = true;
+    let mut capitalise_next = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        let word = bare(token);
+        let next = tokens.get(index + 1).copied();
+        let next_word = next.map(bare).unwrap_or_default();
+        let comma = token.ends_with(',');
+        let after = tokens.len() - index - 1;
+
+        if at_start {
+            // Openers that carry nothing: "So, ...", "You know, ...".
+            let one = comma && matches!(word.as_str(), "so" | "basically" | "like") && after >= 2;
+            let two = !comma
+                && is_plain(token)
+                && next.is_some_and(|next| next.ends_with(',') && is_plain(next))
+                && matches!(
+                    (word.as_str(), next_word.as_str()),
+                    ("you", "know") | ("i", "mean")
+                )
+                && after >= 3;
+            let so = token == "So" && after >= 3 && AFTER_SO.contains(&next_word.as_str());
+            if two {
+                index += 2;
+                capitalise_next = true;
+                continue;
+            }
+            if one || so {
+                index += 1;
+                capitalise_next = true;
+                continue;
+            }
+        } else if let Some(previous) = out.last_mut() {
+            // The same asides between commas, in the middle of a sentence.
+            let one = previous.ends_with(',')
+                && comma
+                && is_plain(token)
+                && matches!(word.as_str(), "like" | "basically");
+            let two = previous.ends_with(',')
+                && !comma
+                && is_plain(token)
+                && word == "you"
+                && next.is_some_and(|next| next.eq_ignore_ascii_case("know,"));
+            if one || two {
+                previous.pop();
+                index += if two { 2 } else { 1 };
+                continue;
+            }
+        }
+
+        // A small word said twice by accident: the first one goes.
+        if is_plain(token) && next_word == word && STUTTERS.contains(&word.as_str()) {
+            capitalise_next = capitalise_next || at_start;
+            index += 1;
+            continue;
+        }
+
+        out.push(if capitalise_next {
+            capitalised(token)
+        } else {
+            token.to_string()
+        });
+        capitalise_next = false;
+        at_start = ends_sentence(token);
+        index += 1;
     }
-    if words
-        .iter()
-        .any(|word| FILLERS.contains(&word.as_str()) || CUES.contains(&word.as_str()))
-    {
-        return false;
+    if out.is_empty() {
+        line.to_string()
+    } else {
+        out.join(" ")
     }
-    !words.windows(2).any(|pair| pair[0] == pair[1])
+}
+
+/// Takes out what a careful typist would not have typed: a throat clearing
+/// "So", an aside like "you know", a small word said twice. Only the cases
+/// that are safe by rule. Anything that needs judgement is left alone, and
+/// `needs_editor` sends it to the model.
+fn tidy(text: &str) -> String {
+    text.split('\n')
+        .map(tidy_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +1095,7 @@ pub fn skip_cleanup(transcription: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// The Mac's own microphone by name, kept current by the watcher below, when
-/// it should stand in for a Bluetooth headset. `None` means: no opinion.
+/// it should stand in for the system input. `None` means: no opinion.
 static BUILT_IN_MICROPHONE: Mutex<Option<String>> = Mutex::new(None);
 
 /// How often the list of microphones is read again. Reading it opens nothing.
@@ -591,34 +1108,23 @@ struct Microphone {
     is_default: bool,
 }
 
-/// A Bluetooth device carries its address in its CoreAudio identifier, as in
-/// `coreaudio:AA-BB-CC-DD-EE-FF:input`.
-fn is_bluetooth_id(id: &str) -> bool {
-    id.split(':').any(|part| {
-        part.len() == 17
-            && part.bytes().enumerate().all(|(index, byte)| {
-                if index % 3 == 2 {
-                    byte == b'-'
-                } else {
-                    byte.is_ascii_hexdigit()
-                }
-            })
-    })
-}
-
 fn is_built_in(microphone: &Microphone) -> bool {
     microphone.id.contains("BuiltInMicrophone")
         || (microphone.name.starts_with("MacBook") && microphone.name.ends_with("Microphone"))
 }
 
-/// The microphone to use in place of the system default, if any. Only ever
-/// answers when the default is a Bluetooth headset and the Mac has its own.
+/// The microphone to use in place of the system default, if any: the Mac's
+/// own, whenever it has one and something else is the default.
+///
+/// A Bluetooth headset is the worst case, a second or more to wake and then
+/// telephone quality. But a display's microphone is slow too: a Studio
+/// Display took 470 ms to open on every single dictation. The Mac's own
+/// microphone is the one that is always ready.
 fn choose_microphone(microphones: &[Microphone]) -> Option<String> {
     let default = microphones
         .iter()
         .find(|microphone| microphone.is_default)?;
-    let wireless = is_bluetooth_id(&default.id) || default.name.to_lowercase().contains("airpods");
-    if !wireless || is_built_in(default) {
+    if is_built_in(default) {
         return None;
     }
     microphones
@@ -645,7 +1151,7 @@ fn refresh_microphone() {
     };
     // A closed lid switches a MacBook's microphone off in hardware, and it
     // would record silence. The lid is only asked about when there is a
-    // choice to veto, which is while a headset is the system input.
+    // choice to veto, which is while something else is the system input.
     if choice.is_some() && crate::helpers::clamshell::is_clamshell().unwrap_or(false) {
         choice = None;
     }
@@ -664,7 +1170,8 @@ pub fn preferred_microphone() -> Option<String> {
 }
 
 /// Called once when the app starts. Loads the speech model so the first
-/// dictation does not wait for it, then keeps an eye on the microphones.
+/// dictation does not wait for it, then keeps an eye on the microphones and
+/// on the private word file.
 pub fn warm_start(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
@@ -678,8 +1185,15 @@ pub fn warm_start(app: &AppHandle) {
                 manager.initiate_model_load(false);
             }
         }
+        let places = personal_places(&app);
+        let mut stamps = None;
         loop {
             refresh_microphone();
+            let now = personal_stamps(&places);
+            if stamps.as_ref() != Some(&now) {
+                load_personal(&places);
+                stamps = Some(now);
+            }
             std::thread::sleep(MICROPHONE_POLL);
         }
     });
@@ -720,7 +1234,23 @@ pub fn prewarm(app: AppHandle) {
     if let Ok(mut slot) = WARM_CONTEXT.lock() {
         *slot = None;
     }
+    if let Ok(mut slot) = DESTINATION.lock() {
+        *slot = None;
+    }
     std::thread::spawn(move || {
+        let (app_name, window) = focus();
+        let destination = destination_of(app_name.as_deref(), window.as_deref());
+        let line = context_line(app_name.as_deref(), window.as_deref());
+        if let Ok(mut slot) = DESTINATION.lock() {
+            *slot = Some((Instant::now(), destination));
+        }
+        if let Ok(mut slot) = WARM_CONTEXT.lock() {
+            *slot = Some((Instant::now(), line.clone()));
+        }
+        // No model will run for these, so there is nothing to warm.
+        if matches!(destination, Destination::AiChat | Destination::Code) {
+            return;
+        }
         let settings = get_settings(&app);
         if !cleanup_by_default(&settings) {
             return;
@@ -728,11 +1258,6 @@ pub fn prewarm(app: AppHandle) {
         let Some(prompt) = selected_prompt(&settings) else {
             return;
         };
-        let (app_name, window) = focus();
-        let line = context_line(app_name.as_deref(), window.as_deref());
-        if let Ok(mut slot) = WARM_CONTEXT.lock() {
-            *slot = Some((Instant::now(), line.clone()));
-        }
         let on_device = settings
             .active_post_process_provider()
             .map_or(false, |provider| {
@@ -952,16 +1477,17 @@ pub fn gate(text: &str) -> String {
         .join("\n")
 }
 
-/// The last step before the text is typed. Runs whenever cleanup is switched
-/// on, whether or not a model was available, and stays out of code contexts.
+/// The last step before the text is typed: tidy, the user's replacements,
+/// then the gate. Runs whenever cleanup is switched on, whether or not a
+/// model ran, and stays out of code contexts.
 pub fn house_style(settings: &AppSettings, text: String) -> String {
     if !settings.post_process_enabled || text.is_empty() {
         return text;
     }
-    let (app, _) = focus();
-    if app.as_deref().map_or(false, is_code_app) {
+    if destination() == Destination::Code {
         return text;
     }
+    let text = apply_replacements(&tidy(&text), &personal().replacements);
     gate(&text)
 }
 
@@ -1083,6 +1609,8 @@ mod tests {
         seed(&mut settings);
         // The house names never land in the user's own list.
         assert!(settings.custom_words.is_empty());
+        assert!(settings.audio_feedback);
+        assert!(matches!(settings.sound_theme, SoundTheme::Pop));
         assert!(matches!(
             settings.model_unload_timeout,
             ModelUnloadTimeout::Never
@@ -1111,9 +1639,9 @@ mod tests {
 
     #[test]
     fn house_names_follow_the_users_own_words() {
-        let own = vec!["Zippy".to_string(), "stowey".to_string()];
+        let own = vec!["Zephyr".to_string(), "stowey".to_string()];
         let words = with_house_vocabulary(&own);
-        assert_eq!(words[0], "Zippy");
+        assert_eq!(words[0], "Zephyr");
         assert_eq!(words[1], "stowey");
         assert_eq!(
             words
@@ -1123,34 +1651,195 @@ mod tests {
             1
         );
         assert!(words.iter().any(|word| word == "Chemaly"));
-        assert_eq!(with_house_vocabulary(&[]).len(), VOCABULARY.len());
+        assert_eq!(merge_vocabulary(&[], &[]).len(), VOCABULARY.len());
     }
 
     #[test]
-    fn clean_short_dictations_skip_the_model() {
-        assert!(skip_cleanup("Yes thanks"));
-        assert!(skip_cleanup("  "));
-        assert!(skip_cleanup("This is now a test from Stowey Voice."));
-        assert!(skip_cleanup("Können wir das morgen um zehn besprechen?"));
+    fn the_private_word_file_is_read_line_by_line() {
+        let mut found = Personal::default();
+        parse_personal(
+            "\u{feff}# People\nMarlow\n  Quillon  \n\nbtw => by the way\nmy email address=>raphael@example.com\n=> nothing\nnothing =>\n",
+            &mut found,
+        );
+        assert_eq!(found.words, vec!["Marlow", "Quillon"]);
+        assert_eq!(
+            found.replacements,
+            vec![
+                ("btw".to_string(), "by the way".to_string()),
+                (
+                    "my email address".to_string(),
+                    "raphael@example.com".to_string()
+                ),
+            ]
+        );
+        // Own words lead, then the file, then the house names, each once.
+        let own = vec!["Zephyr".to_string(), "marlow".to_string()];
+        let merged = merge_vocabulary(&own, &found.words);
+        assert_eq!(
+            merged,
+            vec!["Zephyr", "marlow", "Quillon", "Stowey", "Chemaly"]
+        );
+        let many: Vec<String> = (0..300).map(|n| format!("word{n}")).collect();
+        assert_eq!(merge_vocabulary(&[], &many).len(), VOCABULARY_MAX);
+    }
+
+    #[test]
+    fn replacements_swap_whole_words_whatever_their_capitals() {
+        let rules = vec![
+            ("btw".to_string(), "by the way".to_string()),
+            (
+                "my email address".to_string(),
+                "raphael@example.com".to_string(),
+            ),
+        ];
+        assert_eq!(
+            apply_replacements("Btw, send it to My Email Address.", &rules),
+            "By the way, send it to raphael@example.com."
+        );
+        // Not inside another word.
+        assert_eq!(
+            apply_replacements("The subtwo plan", &rules),
+            "The subtwo plan"
+        );
+        assert_eq!(
+            apply_replacements("Tell him btw that it shipped", &rules),
+            "Tell him by the way that it shipped"
+        );
+        assert_eq!(apply_replacements("Nothing to do", &[]), "Nothing to do");
+    }
+
+    #[test]
+    fn destinations_are_told_apart() {
+        let of = |app: &str, window: &str| destination_of(Some(app), Some(window));
+        assert_eq!(of("Claude", "Claude"), Destination::AiChat);
+        assert_eq!(of("ChatGPT", ""), Destination::AiChat);
+        assert_eq!(
+            of("Google Chrome", "Pricing ideas - Claude - Google Chrome"),
+            Destination::AiChat
+        );
+        assert_eq!(
+            of(
+                "Google Chrome",
+                "Inbox (3) - raphael@example.com - Stowey Mail - Google Chrome"
+            ),
+            Destination::Email
+        );
+        assert_eq!(of("Safari", "Gmail"), Destination::Email);
+        assert_eq!(of("Mail", "New Message"), Destination::Email);
+        assert_eq!(of("Terminal", "zsh"), Destination::Code);
+        assert_eq!(of("Cursor", "main.rs"), Destination::Code);
+        assert_eq!(
+            of("Google Chrome", "Orders - Shopify - Google Chrome"),
+            Destination::Other
+        );
+        // A page that only mentions an assistant is not a chat with one.
+        assert_eq!(
+            of(
+                "Google Chrome",
+                "Claude Monet paintings - Google Search - Google Chrome"
+            ),
+            Destination::Other
+        );
+        assert_eq!(of("Notes", "Notes"), Destination::Other);
+        assert_eq!(destination_of(None, None), Destination::Other);
+    }
+
+    #[test]
+    fn tidy_takes_out_what_nobody_meant_to_type() {
+        assert_eq!(
+            tidy("So I think we should ship it on Friday."),
+            "I think we should ship it on Friday."
+        );
+        assert_eq!(
+            tidy("So, what I need is the invoice. So the plan is simple and clear."),
+            "What I need is the invoice. The plan is simple and clear."
+        );
+        assert_eq!(
+            tidy("We need, like, three more boxes."),
+            "We need three more boxes."
+        );
+        assert_eq!(
+            tidy("It is hard, you know, to plan this."),
+            "It is hard to plan this."
+        );
+        assert_eq!(
+            tidy("You know, it could work for us."),
+            "It could work for us."
+        );
+        assert_eq!(
+            tidy("I I think the the plan works. The the rest is fine."),
+            "I think the plan works. The rest is fine."
+        );
+        assert_eq!(
+            tidy("Line one\nSo, we can go now then."),
+            "Line one\nWe can go now then."
+        );
+    }
+
+    #[test]
+    fn tidy_leaves_meaning_alone() {
+        for kept in [
+            "So far so good.",
+            "So that is done.",
+            "So much for the plan today.",
+            "So what?",
+            "It is very very good.",
+            "Like I said, we ship on Monday.",
+            "I like the new box a lot.",
+            "You know the answer already.",
+            "Yeah, that works for me.",
+            "No, we had had enough of that.",
+            "Können wir das morgen um zehn besprechen?",
+        ] {
+            assert_eq!(tidy(kept), kept);
+        }
+    }
+
+    #[test]
+    fn clean_dictations_skip_the_model_at_any_length() {
+        let other = |text: &str| skips(text, Destination::Other);
+        assert!(other("Yes thanks"));
+        assert!(other("  "));
+        assert!(other("This is now a test from Stowey Voice."));
+        assert!(other("Können wir das morgen um zehn besprechen?"));
+        assert!(other(
+            "I looked at the numbers again this morning and the margin on the four pack is \
+             better than on the two pack, which means we should lead with it on the page and \
+             move the single hook further down."
+        ));
+        // A plain no, a first without a second, a line that is not a new line.
+        assert!(other("There is no stock left in the warehouse today"));
+        assert!(other("The first order went out to the customer yesterday"));
+        assert!(other("Put the logo on the top line of the box"));
     }
 
     #[test]
     fn anything_that_needs_an_editor_goes_to_the_model() {
-        // A filler, a repeat, a correction, a list, a greeting, a long one.
-        assert!(!skip_cleanup("So, um, we should ship it on Friday"));
-        assert!(!skip_cleanup("Wir liefern, äh, am Freitag oder am Montag"));
-        assert!(!skip_cleanup("We should should ship it on Friday"));
-        assert!(!skip_cleanup("Ship it on Friday, no, on Monday"));
-        assert!(!skip_cleanup("Ship it Friday, I mean Monday morning"));
-        assert!(!skip_cleanup(
-            "First the hooks, second the boxes, then labels"
-        ));
-        assert!(!skip_cleanup(
-            "Hi Daniel, thanks for the mockup, best Raphael"
-        ));
-        assert!(!skip_cleanup(
-            "This one runs past twelve words so the model gets to lay it out properly for the reader"
-        ));
+        let other = |text: &str| skips(text, Destination::Other);
+        // A hesitation, a repeat, corrections, a list, a layout, a greeting.
+        assert!(!other("We deliver on, um, Friday or on Monday"));
+        assert!(!other("Wir liefern, äh, am Freitag oder am Montag"));
+        assert!(!other("We should ship ship it on Friday"));
+        assert!(!other("Ship it on Friday, no, on Monday"));
+        assert!(!other("Ship it Friday. No, make that Monday morning"));
+        assert!(!other("Ship it Friday, I mean Monday morning"));
+        assert!(!other("Ship it Friday, scratch that, Monday morning"));
+        assert!(!other("First the hooks, second the boxes, then labels"));
+        assert!(!other("Hooks and boxes, new paragraph, then the labels"));
+        assert!(!other("Hi Anna, thanks for the mockup, best wishes Tom"));
+    }
+
+    #[test]
+    fn the_destination_decides_first() {
+        let correction = "Ship it on Friday, no, on Monday morning";
+        let plain = "Please send me the invoice for the last order";
+        // A model reads the chat, and a terminal takes it as spoken.
+        assert!(skips(correction, Destination::AiChat));
+        assert!(skips(correction, Destination::Code));
+        // An email is always edited, a short reply aside.
+        assert!(!skips(plain, Destination::Email));
+        assert!(skips("Sounds good thanks", Destination::Email));
+        assert!(skips(plain, Destination::Other));
     }
 
     fn microphone(id: &str, name: &str, is_default: bool) -> Microphone {
@@ -1162,11 +1851,11 @@ mod tests {
     }
 
     #[test]
-    fn a_bluetooth_default_yields_to_the_built_in_microphone() {
+    fn the_macs_own_microphone_is_preferred() {
         let airpods_default = [
             microphone(
                 "coreaudio:AC-BC-32-0F-9A-11:input",
-                "Raphael’s AirPods",
+                "Raphael\u{2019}s AirPods",
                 true,
             ),
             microphone(
@@ -1179,9 +1868,13 @@ mod tests {
             choose_microphone(&airpods_default).as_deref(),
             Some("MacBook Pro Microphone")
         );
-        // Any Bluetooth headset, whatever it is called.
-        let other_headset = [
-            microphone("coreaudio:00-1B-66-AA-BB-CC:input", "WH-1000XM5", true),
+        // A display's microphone is slow to open too.
+        let display_default = [
+            microphone(
+                "coreaudio:AppleUSBAudioEngine:Apple Inc.:Studio Display:1",
+                "Studio Display Microphone",
+                true,
+            ),
             microphone(
                 "coreaudio:BuiltInMicrophoneDevice",
                 "MacBook Air Microphone",
@@ -1189,18 +1882,18 @@ mod tests {
             ),
         ];
         assert_eq!(
-            choose_microphone(&other_headset).as_deref(),
+            choose_microphone(&display_default).as_deref(),
             Some("MacBook Air Microphone")
         );
     }
 
     #[test]
-    fn every_other_setup_keeps_the_system_default() {
+    fn there_is_no_opinion_without_a_better_microphone() {
         // The Mac's own microphone is already the default.
         let built_in_default = [
             microphone(
                 "coreaudio:AC-BC-32-0F-9A-11:input",
-                "Raphael’s AirPods",
+                "Raphael\u{2019}s AirPods",
                 false,
             ),
             microphone(
@@ -1210,33 +1903,14 @@ mod tests {
             ),
         ];
         assert_eq!(choose_microphone(&built_in_default), None);
-        // A wired microphone someone made the default on purpose.
-        let usb_default = [
-            microphone(
-                "coreaudio:AppleUSBAudioEngine:Shure:MV7:1",
-                "Shure MV7",
-                true,
-            ),
-            microphone(
-                "coreaudio:BuiltInMicrophoneDevice",
-                "MacBook Pro Microphone",
-                false,
-            ),
-        ];
-        assert_eq!(choose_microphone(&usb_default), None);
         // A desktop Mac with a headset and no microphone of its own.
         let desktop = [microphone(
             "coreaudio:AC-BC-32-0F-9A-11:input",
-            "Raphael’s AirPods",
+            "Raphael\u{2019}s AirPods",
             true,
         )];
         assert_eq!(choose_microphone(&desktop), None);
         assert_eq!(choose_microphone(&[]), None);
-        assert!(is_bluetooth_id("coreaudio:AC-BC-32-0F-9A-11:input"));
-        assert!(!is_bluetooth_id("coreaudio:BuiltInMicrophoneDevice"));
-        assert!(!is_bluetooth_id(
-            "coreaudio:AppleUSBAudioEngine:Shure:MV7:1"
-        ));
     }
 
     #[test]

@@ -17,9 +17,12 @@ stock behaviour.
 from __future__ import annotations
 
 import json
+import math
 import shutil
+import struct
 import subprocess
 import sys
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,9 +58,10 @@ def patch(path: Path, old: str, new: str, count: int = 1) -> None:
 def patch_rust() -> None:
     src = TAURI / "src"
     shutil.copyfile(OVERLAY / "stowey.rs", src / "stowey.rs")
+    shutil.copyfile(OVERLAY / "stowey_live.rs", src / "stowey_live.rs")
 
     lib = src / "lib.rs"
-    patch(lib, "mod signal_handle;\n", "mod signal_handle;\nmod stowey;\n")
+    patch(lib, "mod signal_handle;\n", "mod signal_handle;\nmod stowey;\nmod stowey_live;\n")
     patch(lib, '.title("Handy")', f'.title("{NAME}")')
     # Load the speech model at launch and start watching the microphones.
     patch(
@@ -137,6 +141,31 @@ def patch_rust() -> None:
         src / "managers" / "transcription.rs",
         "    if supports_vocabulary {\n        custom_words.to_vec()\n",
         "    if supports_vocabulary {\n        crate::stowey::with_house_vocabulary(custom_words)\n",
+    )
+
+    # 8. A live recording is cut at every pause and decoded while the user is
+    #    still speaking. A whole clip keeps upstream's chunker.
+    chunked = src / "managers" / "transcription" / "chunked.rs"
+    patch(
+        chunked,
+        "use crate::audio_toolkit::chunking::Chunker;\n",
+        "use crate::stowey_live::Chunker;\n",
+    )
+    patch(
+        chunked,
+        "        let mut decode = Self::new(tm, mark, setup, model_id, backend);\n"
+        "        decode.push(audio);\n",
+        "        let mut decode = Self::new(tm, mark, setup, model_id, backend);\n"
+        "        decode.chunker.whole_clip();\n"
+        "        decode.push(audio);\n",
+    )
+    # 9. The chunks' texts are joined with their seams mended.
+    transcription = src / "managers" / "transcription.rs"
+    patch(transcription, "use crate::audio_toolkit::chunking;\n", "")
+    patch(
+        transcription,
+        "            chunking::join_transcripts(&many.iter().map(|t| t.text.as_str()).collect::<Vec<_>>())\n",
+        "            crate::stowey_live::join(&many.iter().map(|t| t.text.as_str()).collect::<Vec<_>>())\n",
     )
 
     settings = src / "settings.rs"
@@ -325,6 +354,86 @@ def patch_swift() -> None:
         '@_cdecl("process_text_with_system_prompt_apple")',
     )
     stub.write_text(stub.read_text(encoding="utf-8") + SWIFT_WARM_STUB, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Sounds
+# ---------------------------------------------------------------------------
+
+SOUND_RATE = 48_000
+
+
+def bloop(path: Path, start_hz: float, end_hz: float, seconds: float, level: float) -> None:
+    """A soft tone that glides from one pitch to another and fades: up for
+    "listening", down for "done". One partial and a quiet octave above it, so
+    it stays a tone and never sounds like a voice to the microphone."""
+    frames = int(SOUND_RATE * seconds)
+    glide = 0.45 * seconds
+    attack = 0.006
+    release = 0.03
+    phase = 0.0
+    samples = []
+    for n in range(frames):
+        t = n / SOUND_RATE
+        # The pitch moves fast at first and settles, like a drop into water.
+        progress = 1.0 - math.exp(-4.0 * min(t / glide, 4.0))
+        hz = start_hz + (end_hz - start_hz) * progress
+        phase += 2.0 * math.pi * hz / SOUND_RATE
+        body = math.sin(phase) + 0.16 * math.exp(-t / 0.03) * math.sin(2.0 * phase)
+        rise = 0.5 - 0.5 * math.cos(math.pi * min(t / attack, 1.0))
+        decay = math.exp(-t / (0.42 * seconds))
+        fall = 0.5 - 0.5 * math.cos(math.pi * min((seconds - t) / release, 1.0))
+        samples.append(level * body * rise * decay * fall)
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(SOUND_RATE)
+        out.writeframes(
+            b"".join(struct.pack("<hh", *(2 * [int(max(-1.0, min(1.0, s)) * 32767)])) for s in samples)
+        )
+
+
+def patch_sounds() -> None:
+    """Stowey's own two sounds take the place of upstream's "Pop" theme, which
+    `stowey.rs` switches on. Drawn here, so no sound file is copied from anyone."""
+    resources = TAURI / "resources"
+    for name in ("pop_start.wav", "pop_stop.wav"):
+        if not (resources / name).exists():
+            sys.exit(f"stowey/apply.py: expected {name} in src-tauri/resources")
+    bloop(resources / "pop_start.wav", 520.0, 880.0, 0.17, 0.30)
+    bloop(resources / "pop_stop.wav", 740.0, 440.0, 0.19, 0.26)
+    patch(
+        SRC / "components" / "settings" / "SoundPicker.tsx",
+        '{ value: "pop", label: "Pop" },',
+        '{ value: "pop", label: "Stowey" },',
+    )
+
+
+# ---------------------------------------------------------------------------
+# The pill
+# ---------------------------------------------------------------------------
+
+
+def patch_pill() -> None:
+    """The recording pill as glass: `stowey/pill.css` goes on the end of the
+    overlay's stylesheet, and the window gets room for the pill's shadow."""
+    css = SRC / "overlay" / "RecordingOverlay.css"
+    text = css.read_text(encoding="utf-8")
+    for needed in (".scard {", ".scard.compact {", ".ov-stage {", ".swave i {", ".sx {"):
+        if needed not in text:
+            sys.exit(f"stowey/apply.py: the overlay stylesheet no longer has {needed}")
+    pill = (OVERLAY / "pill.css").read_text(encoding="utf-8")
+    css.write_text(text.rstrip("\n") + "\n\n" + pill, encoding="utf-8")
+
+    overlay = TAURI / "src" / "overlay.rs"
+    # 22 more points of height: 14 under the pill for its shadow, 8 above.
+    patch(overlay, "const OVERLAY_HEIGHT: f64 = 50.0;", "const OVERLAY_HEIGHT: f64 = 72.0;")
+    # And 14 lower, so the pill itself stays 15 above the edge of the screen.
+    patch(
+        overlay,
+        '#[cfg(target_os = "macos")]\nconst OVERLAY_BOTTOM_OFFSET: f64 = 15.0;',
+        '#[cfg(target_os = "macos")]\nconst OVERLAY_BOTTOM_OFFSET: f64 = 1.0;',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +795,8 @@ def main() -> None:
     patch_strings()
     write_components()
     patch_theme()
+    patch_sounds()
+    patch_pill()
     draw_brand_images()
     marker.write_text("applied\n", encoding="utf-8")
     print(f"{NAME}: overlay applied.")
