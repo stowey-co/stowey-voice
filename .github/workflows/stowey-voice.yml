@@ -19,18 +19,27 @@ concurrency:
 
 jobs:
   build:
-    name: Build (${{ matrix.label }})
+    name: Build (${{ matrix.label }} on ${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
         include:
           # macOS 26 carries the Apple Intelligence SDK the cleanup model needs.
+          # GitHub's Apple silicon machines are often out of capacity, so the
+          # Apple silicon app is also built on an Intel machine. Whichever
+          # finishes publishes; the native build wins when both do.
           - platform: macos-26
             target: aarch64-apple-darwin
             label: apple-silicon
-          - platform: macos-latest
+            replace: "yes"
+          - platform: macos-26-intel
+            target: aarch64-apple-darwin
+            label: apple-silicon
+            replace: "no"
+          - platform: macos-26-intel
             target: x86_64-apple-darwin
             label: intel
+            replace: "yes"
     runs-on: ${{ matrix.platform }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -50,7 +59,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
-          key: stowey-${{ matrix.target }}
+          key: stowey-${{ matrix.platform }}-${{ matrix.target }}
           cache-bin: false
 
       - name: Install frontend dependencies
@@ -68,6 +77,20 @@ jobs:
       - name: Build the app
         run: bun run tauri build --target ${{ matrix.target }}
 
+      - name: Inspect the app
+        run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Stowey Voice.app"
+          ls "$APP/Contents/MacOS"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleName" -c "Print :CFBundleIdentifier" -c "Print :CFBundleShortVersionString" -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
+          BIN="$(find "$APP/Contents/MacOS" -type f -perm +111 | head -1)"
+          echo "binary: $BIN"
+          lipo -archs "$BIN"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "Identifier|Signature|flags|TeamIdentifier" || true
+          echo "FoundationModels linked: $(otool -L "$BIN" | grep -c FoundationModels || true)"
+          echo "Stowey prompt in binary: $(strings -a "$BIN" | grep -c "You are a dictation editor" || true)"
+          echo "upstream updater endpoint in bundle: $(grep -rac "cjpais/Handy/releases/latest/download/latest.json" "$APP/Contents" | awk -F: '{s+=$NF} END {print s+0}')"
+
       - name: Collect the installer
         run: |
           mkdir -p out
@@ -77,7 +100,7 @@ jobs:
       - name: Keep the installer as a build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: stowey-voice-${{ matrix.label }}
+          name: stowey-voice-${{ matrix.label }}-built-on-${{ matrix.platform }}
           path: out/*.dmg
           retention-days: 30
 
@@ -91,4 +114,8 @@ jobs:
             --title "Stowey Voice ${TAG}" \
             --notes-file stowey/RELEASE_NOTES.md \
             --latest || echo "Release ${TAG} already exists, adding to it."
-          gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
+          if [ "${{ matrix.replace }}" = "yes" ]; then
+            gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" || echo "The native build already published this installer. Keeping it."
+          fi

@@ -149,6 +149,29 @@ def patch_rust() -> None:
     )
 
 
+def patch_build_script() -> None:
+    """Lets an Intel Mac build the Apple silicon app, cleanup model included.
+
+    Upstream only builds the Apple Intelligence bridge when the build machine
+    itself is Apple silicon. GitHub's Apple silicon build machines are often
+    out of capacity while its Intel ones are free, so the bridge is built
+    whenever the target is Apple silicon, whatever the machine.
+    """
+    build = TAURI / "build.rs"
+    gate = '#[cfg(all(target_os = "macos", target_arch = "aarch64"))]'
+    patch(
+        build,
+        f"    {gate}\n    build_apple_intelligence_bridge();\n",
+        '    #[cfg(target_os = "macos")]\n'
+        "    {\n"
+        '        if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") {\n'
+        "            build_apple_intelligence_bridge();\n"
+        "        }\n"
+        "    }\n",
+    )
+    patch(build, gate, '#[cfg(target_os = "macos")]', count=2)
+
+
 # ---------------------------------------------------------------------------
 # App identity
 # ---------------------------------------------------------------------------
@@ -502,6 +525,7 @@ def main() -> None:
     if marker.exists():
         sys.exit("stowey/apply.py: already applied. Run it on a clean checkout.")
     patch_rust()
+    patch_build_script()
     patch_identity()
     patch_strings()
     write_components()
