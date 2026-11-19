@@ -5,7 +5,9 @@ name: Stowey® Voice
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # `try/` branches are built and photographed but never released: nothing
+    # half done can reach the download links.
+    branches: [main, "try/**"]
     paths:
       - "stowey/**"
       - ".github/workflows/stowey-voice.yml"
@@ -110,6 +112,57 @@ jobs:
           APP="$(ls -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/"*.app | head -1)"
           "$APP/Contents/MacOS/handy" --help
 
+      # Nobody can look at this app from the cloud, so the build machine does:
+      # it shows the pill through a hidden switch and takes a picture, once in
+      # light mode and once in dark mode.
+      - name: Photograph the pill
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          APP="$(ls -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/"*.app | head -1)"
+          mkdir -p shots
+          sw_vers | tee shots/machine.txt
+          system_profiler SPDisplaysDataType 2>/dev/null | grep -E "Resolution|Retina|UI Looks" | tee -a shots/machine.txt || true
+          for mode in light dark; do
+            if [ "$mode" = dark ]; then
+              defaults write -g AppleInterfaceStyle Dark
+            else
+              defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+            fi
+            for state in listening working; do
+              STOWEY_SHOW_PILL="$state" "$APP/Contents/MacOS/handy" > "shots/app-$mode-$state.txt" 2>&1 &
+              PID=$!
+              sleep 14
+              screencapture -x "shots/screen-$mode-$state.png" || echo "screencapture failed for $mode $state"
+              kill "$PID" 2>/dev/null || true
+              sleep 3
+            done
+          done
+          defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+          cp "$HOME/Library/Logs/co.stowey.voice/handy.log" shots/handy.log 2>/dev/null || true
+          ls -la shots
+
+      - name: Keep the photographs as a build artifact
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-artifact@v7
+        with:
+          name: stowey-voice-photographs
+          path: shots/*
+          retention-days: 30
+
+      # A prerelease that carries only the photographs, so they can be fetched
+      # by plain download. Deleted once they have been looked at.
+      - name: Share the photographs
+        if: matrix.target == 'x86_64-apple-darwin' && github.ref != 'refs/heads/main'
+        run: |
+          TAG="photographs-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Pill photographs, run ${GITHUB_RUN_NUMBER}" \
+            --notes "Screenshots from the build machine. Not an app release." \
+            --prerelease || echo "Release ${TAG} already exists, adding to it."
+          gh release upload "$TAG" shots/* --repo "$GITHUB_REPOSITORY" --clobber
+
       - name: Collect the installer
         run: |
           mkdir -p out
@@ -127,6 +180,7 @@ jobs:
       # latest release only once both installers are there and the tests pass,
       # so the download links never point at a half finished release.
       - name: Attach to the release
+        if: github.ref == 'refs/heads/main'
         run: |
           VERSION=$(grep -o '"version": "[^"]*"' src-tauri/tauri.conf.json | head -1 | cut -d'"' -f4)
           TAG="v${VERSION}-stowey.${GITHUB_RUN_NUMBER}"
@@ -174,6 +228,7 @@ jobs:
   publish:
     name: Publish
     needs: [build, test]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Check out

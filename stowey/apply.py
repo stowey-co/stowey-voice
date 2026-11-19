@@ -61,16 +61,34 @@ def patch_rust() -> None:
     src = TAURI / "src"
     shutil.copyfile(OVERLAY / "stowey.rs", src / "stowey.rs")
     shutil.copyfile(OVERLAY / "stowey_live.rs", src / "stowey_live.rs")
+    shutil.copyfile(OVERLAY / "stowey_glass.rs", src / "stowey_glass.rs")
+    shutil.copyfile(OVERLAY / "stowey_mac.rs", src / "stowey_mac.rs")
 
     lib = src / "lib.rs"
-    patch(lib, "mod signal_handle;\n", "mod signal_handle;\nmod stowey;\nmod stowey_live;\n")
+    patch(lib, "mod signal_handle;\n", "mod signal_handle;\nmod stowey;\nmod stowey_glass;\nmod stowey_live;\n")
+    # The overlay's web view tells the app where the pill is, for the glass.
+    patch(
+        lib,
+        "        .commands(collect_commands![\n            shortcut::change_binding,\n",
+        "        .commands(collect_commands![\n"
+        "            stowey_glass::stowey_glass,\n"
+        "            stowey_glass::stowey_glass_kind,\n"
+        "            shortcut::change_binding,\n",
+    )
+    # A copy of the app under an older name must not answer in place of this one.
+    patch(
+        lib,
+        "pub fn run(cli_args: CliArgs) {\n",
+        "pub fn run(cli_args: CliArgs) {\n    stowey_glass::retire_older_copies();\n",
+    )
     patch(lib, '.title("Handy")', f'.title("{NAME}")')
     # Load the speech model at launch and start watching the microphones.
     patch(
         lib,
         "    app_handle.manage(TranscriptionJobManager::new(app_handle));\n",
         "    app_handle.manage(TranscriptionJobManager::new(app_handle));\n"
-        "    crate::stowey::warm_start(app_handle);\n",
+        "    crate::stowey::warm_start(app_handle);\n"
+        "    crate::stowey_glass::demo(app_handle);\n",
     )
 
     actions = src / "actions.rs"
@@ -365,27 +383,43 @@ def patch_swift() -> None:
 SOUND_RATE = 48_000
 
 
-def bloop(path: Path, start_hz: float, end_hz: float, seconds: float, level: float) -> None:
-    """A soft tone that glides from one pitch to another and fades: up for
-    "listening", down for "done". One partial and a quiet octave above it, so
-    it stays a tone and never sounds like a voice to the microphone."""
-    frames = int(SOUND_RATE * seconds)
-    glide = 0.45 * seconds
-    attack = 0.006
-    release = 0.03
+def _edges(t: float, seconds: float, attack: float, release: float) -> float:
+    """Raised cosine in and out, so a sound never starts or ends on a click."""
+    rise = 0.5 - 0.5 * math.cos(math.pi * min(t / attack, 1.0))
+    fall = 0.5 - 0.5 * math.cos(math.pi * min(max(seconds - t, 0.0) / release, 1.0))
+    return rise * fall
+
+
+def knock(
+    hz: float,
+    level: float,
+    tau: float = 0.05,
+    bend: float = 1.0,
+    bend_tau: float = 0.014,
+    attack: float = 0.002,
+    partials=(),
+    seconds: float | None = None,
+) -> list[float]:
+    """One low note that is struck and dies. `bend` is where the pitch starts
+    as a multiple of where it settles: above 1 it falls into the note, below 1
+    it rises into it. `partials` are overtones as (multiple, loudness, how
+    much faster they die than the note itself)."""
+    seconds = 5.0 * tau if seconds is None else seconds
     phase = 0.0
-    samples = []
-    for n in range(frames):
+    out = []
+    for n in range(int(SOUND_RATE * seconds)):
         t = n / SOUND_RATE
-        # The pitch moves fast at first and settles, like a drop into water.
-        progress = 1.0 - math.exp(-4.0 * min(t / glide, 4.0))
-        hz = start_hz + (end_hz - start_hz) * progress
-        phase += 2.0 * math.pi * hz / SOUND_RATE
-        body = math.sin(phase) + 0.16 * math.exp(-t / 0.03) * math.sin(2.0 * phase)
-        rise = 0.5 - 0.5 * math.cos(math.pi * min(t / attack, 1.0))
-        decay = math.exp(-t / (0.42 * seconds))
-        fall = 0.5 - 0.5 * math.cos(math.pi * min((seconds - t) / release, 1.0))
-        samples.append(level * body * rise * decay * fall)
+        now = hz * (1.0 + (bend - 1.0) * math.exp(-t / bend_tau))
+        phase += 2.0 * math.pi * now / SOUND_RATE
+        body = math.sin(phase)
+        for multiple, gain, faster in partials:
+            body += gain * math.exp(-t * (faster - 1.0) / tau) * math.sin(multiple * phase)
+        out.append(level * body * math.exp(-t / tau) * _edges(t, seconds, attack, min(0.04, tau)))
+    return out
+
+
+def write_sound(path: Path, samples: list[float]) -> None:
+    """16 bit, two channels, as the app's own sound files are."""
     with wave.open(str(path), "wb") as out:
         out.setnchannels(2)
         out.setsampwidth(2)
@@ -402,8 +436,10 @@ def patch_sounds() -> None:
     for name in ("pop_start.wav", "pop_stop.wav"):
         if not (resources / name).exists():
             sys.exit(f"stowey/apply.py: expected {name} in src-tauri/resources")
-    bloop(resources / "pop_start.wav", 520.0, 880.0, 0.17, 0.30)
-    bloop(resources / "pop_stop.wav", 740.0, 440.0, 0.19, 0.26)
+    # Felt, the pair Raphael chose: low, soft and short, with no edge. The
+    # higher note for "listening", the lower one for "done".
+    write_sound(resources / "pop_start.wav", knock(349.23, 0.44, tau=0.055, bend=0.94, attack=0.009))
+    write_sound(resources / "pop_stop.wav", knock(233.08, 0.54, tau=0.06, bend=1.08, attack=0.009))
     patch(
         SRC / "components" / "settings" / "SoundPicker.tsx",
         '{ value: "pop", label: "Pop" },',
@@ -418,7 +454,8 @@ def patch_sounds() -> None:
 
 def patch_pill() -> None:
     """The recording pill as glass: `stowey/pill.css` goes on the end of the
-    overlay's stylesheet, and the window gets room for the pill's shadow."""
+    overlay's stylesheet, the window gets room for the pill's shadow, and a
+    small script reports where the pill is. The glass itself is native."""
     css = SRC / "overlay" / "RecordingOverlay.css"
     text = css.read_text(encoding="utf-8")
     for needed in (".scard {", ".scard.compact {", ".ov-stage {", ".swave i {", ".sx {"):
@@ -430,6 +467,13 @@ def patch_pill() -> None:
     overlay = TAURI / "src" / "overlay.rs"
     # 22 more points of height: 14 under the pill for its shadow, 8 above.
     patch(overlay, "const OVERLAY_HEIGHT: f64 = 50.0;", "const OVERLAY_HEIGHT: f64 = 72.0;")
+    # The script that tells the app where the pill is, so macOS can put glass there.
+    shutil.copyfile(OVERLAY / "stoweyGlass.ts", SRC / "overlay" / "stoweyGlass.ts")
+    patch(
+        SRC / "overlay" / "main.tsx",
+        'import RecordingOverlay from "./RecordingOverlay";\n',
+        'import RecordingOverlay from "./RecordingOverlay";\nimport "./stoweyGlass";\n',
+    )
     # And 14 lower, so the pill itself stays 15 above the edge of the screen.
     patch(
         overlay,
