@@ -19,7 +19,8 @@
 //! 7. Microphone: when the system input is a Bluetooth headset and nobody
 //!    chose a microphone, the Mac's own microphone is used. A headset needs
 //!    a second or more to switch into call mode and sends telephone quality
-//!    sound, which costs both the first words and the accuracy.
+//!    sound, which costs both the first words and the accuracy. Not with the
+//!    lid closed: a closed MacBook's microphone is switched off.
 
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
@@ -627,7 +628,7 @@ fn choose_microphone(microphones: &[Microphone]) -> Option<String> {
 }
 
 fn refresh_microphone() {
-    let choice = match handy_recorder::list_input_devices() {
+    let mut choice = match handy_recorder::list_input_devices() {
         Ok(devices) => {
             let microphones: Vec<Microphone> = devices
                 .into_iter()
@@ -642,6 +643,12 @@ fn refresh_microphone() {
         // A failed listing is no reason to change microphones.
         Err(_) => return,
     };
+    // A closed lid switches a MacBook's microphone off in hardware, and it
+    // would record silence. The lid is only asked about when there is a
+    // choice to veto, which is while a headset is the system input.
+    if choice.is_some() && crate::helpers::clamshell::is_clamshell().unwrap_or(false) {
+        choice = None;
+    }
     if let Ok(mut slot) = BUILT_IN_MICROPHONE.lock() {
         if *slot != choice {
             log::info!("Stowey Voice microphone preference: {:?}", choice);

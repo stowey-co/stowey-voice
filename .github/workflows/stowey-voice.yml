@@ -68,7 +68,20 @@ jobs:
         run: bun run tauri icon stowey/build/app-icon.png
 
       - name: Build the app
-        run: bun run tauri build --target ${{ matrix.target }}
+        run: |
+          # Packing the disk image fails now and then on GitHub's Macs, with
+          # the app itself already built and signed. The compile is cached by
+          # then, so another go costs a minute or two.
+          for attempt in 1 2 3; do
+            if bun run tauri build --target ${{ matrix.target }}; then
+              exit 0
+            fi
+            echo "::warning::Build attempt $attempt failed."
+            hdiutil detach "/Volumes/Stowey Voice" -force 2>/dev/null || true
+            rm -f "src-tauri/target/${{ matrix.target }}/release/bundle/dmg/"rw.*.dmg 2>/dev/null || true
+            sleep 20
+          done
+          exit 1
 
       - name: Inspect the app
         run: |
@@ -81,7 +94,10 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "Identifier|Signature|flags|TeamIdentifier" || true
           echo "FoundationModels linked: $(otool -L "$BIN" | grep -c FoundationModels || true)"
-          echo "Stowey prompt in binary: $(strings -a "$BIN" | grep -c "You are a dictation editor" || true)"
+          # The opening words of the prompt, read from the source so this
+          # check follows the prompt when it is rewritten.
+          MARK="$(sed -n 's/^const PROMPT: &str = r#"\([^.]*\)\..*/\1/p' stowey/stowey.rs)"
+          echo "Stowey prompt in binary: $(strings -a "$BIN" | grep -cF "$MARK" || true)"
           echo "upstream updater endpoint in bundle: $(grep -rac "cjpais/Handy/releases/latest/download/latest.json" "$APP/Contents" | awk -F: '{s+=$NF} END {print s+0}')"
 
       # The build machine is Intel, so only the Intel app can be started here.
