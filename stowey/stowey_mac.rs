@@ -12,6 +12,12 @@
 //! The pill wears the opposite of the Mac's mode: dark glass in light mode,
 //! light glass in dark mode, so it stands out from what is around it.
 //!
+//! How see through the glass is cannot be judged on a build machine: it runs
+//! in a virtual machine that draws every glass flat, its own Dock included.
+//! So the look can be tuned on a real Mac without a new build. A file named
+//! `pill.txt` beside the app's log may hold two lines, for example
+//! `glass = clear` and `tint = 0.2`. It is read again about once a second.
+//!
 //! No Tauri in this file, so it can be checked against AppKit on its own.
 
 use std::cell::{Cell, RefCell};
@@ -52,21 +58,67 @@ pub enum Kind {
 
 const LIQUID_CLASS: &CStr = c"NSGlassEffectView";
 
-/// How strongly the glass is tinted toward black or white. Enough for the
-/// bars to read on any picture, little enough to stay glass.
-const TINT: f64 = 0.32;
+/// Apple makes two kinds of its glass. Regular is frosted. Clear lets far more
+/// through, and is the default here, because see through is what was asked for.
+const CLEAR: bool = true;
 
-/// For the build machine's photographs only. STOWEY_GLASS picks the glass,
-/// "regular", "clear" or "frosted", and STOWEY_TINT its tint, so that several
-/// can be compared in one run. Nobody sets these on a real Mac.
+/// How strongly the glass is tinted toward black or white, from 0 to 1.
+/// Enough for the bars to read on any picture, little enough to stay glass.
+const TINT: f64 = 0.2;
+
+/// The file beside the log in which the look can be tuned.
+const LOOK_FILE: &str = "pill.txt";
+
+/// For the build machine's photographs. STOWEY_GLASS picks the glass,
+/// "regular", "clear" or "frosted", and STOWEY_TINT its tint. Empty counts
+/// as not set.
 fn asked(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-fn tint() -> f64 {
-    asked("STOWEY_TINT")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(TINT)
+/// What the glass wears: its tone, its kind and its tint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Look {
+    dark: bool,
+    clear: bool,
+    tint: f64,
+}
+
+/// The kind and the tint: the defaults, then the file, then the build
+/// machine's switches. Anything unreadable is passed over.
+fn chosen() -> (bool, f64) {
+    let mut clear = CLEAR;
+    let mut tint = TINT;
+    let mut read = |key: &str, value: &str| match key {
+        "glass" => match value {
+            "clear" => clear = true,
+            "regular" => clear = false,
+            _ => {}
+        },
+        "tint" => {
+            if let Ok(strength) = value.parse::<f64>() {
+                tint = strength.clamp(0.0, 0.9);
+            }
+        }
+        _ => {}
+    };
+    let file = std::env::var("HOME").ok().and_then(|home| {
+        let identifier = NSBundle::mainBundle().bundleIdentifier()?.to_string();
+        let path = format!("{home}/Library/Logs/{identifier}/{LOOK_FILE}");
+        std::fs::read_to_string(path).ok()
+    });
+    for line in file.as_deref().unwrap_or("").lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            read(key.trim(), value.trim());
+        }
+    }
+    if let Some(value) = asked("STOWEY_GLASS") {
+        read("glass", &value);
+    }
+    if let Some(value) = asked("STOWEY_TINT") {
+        read("tint", &value);
+    }
+    (clear, tint)
 }
 
 /// Asked of the system itself instead of a version number: the class is
@@ -90,13 +142,7 @@ enum Glass {
 impl Glass {
     fn new(mtm: MainThreadMarker) -> Self {
         match kind() {
-            Kind::Liquid => {
-                let view = NSGlassEffectView::new(mtm);
-                if asked("STOWEY_GLASS").as_deref() == Some("clear") {
-                    view.setStyle(NSGlassEffectViewStyle::Clear);
-                }
-                Glass::Liquid(view)
-            }
+            Kind::Liquid => Glass::Liquid(NSGlassEffectView::new(mtm)),
             Kind::Frosted => {
                 let view = NSVisualEffectView::new(mtm);
                 // Follows light and dark mode, and lets the most through.
@@ -117,12 +163,12 @@ impl Glass {
         }
     }
 
-    /// Dark glass or light glass. The view is given a mode of its own, so it
-    /// no longer follows the Mac's.
-    fn dress(&self, dark: bool) {
+    /// Dark glass or light glass, clear or frosted, tinted or not. The view
+    /// is given a mode of its own, so it no longer follows the Mac's.
+    fn dress(&self, look: Look) {
         // SAFETY: both names are constants AppKit sets up before our code runs.
         let name = unsafe {
-            if dark {
+            if look.dark {
                 NSAppearanceNameDarkAqua
             } else {
                 NSAppearanceNameAqua
@@ -132,10 +178,14 @@ impl Glass {
         match self {
             Glass::Liquid(view) => {
                 view.setAppearance(appearance.as_deref());
-                let white = if dark { 0.0 } else { 1.0 };
-                let strength = tint();
-                if strength > 0.0 {
-                    view.setTintColor(Some(&NSColor::colorWithWhite_alpha(white, strength)));
+                view.setStyle(if look.clear {
+                    NSGlassEffectViewStyle::Clear
+                } else {
+                    NSGlassEffectViewStyle::Regular
+                });
+                if look.tint > 0.0 {
+                    let white = if look.dark { 0.0 } else { 1.0 };
+                    view.setTintColor(Some(&NSColor::colorWithWhite_alpha(white, look.tint)));
                 } else {
                     view.setTintColor(None);
                 }
@@ -163,8 +213,29 @@ impl Glass {
 thread_local! {
     /// One glass for the one overlay. Main thread only, like all of AppKit.
     static GLASS: RefCell<Option<Glass>> = const { RefCell::new(None) };
-    /// What the glass wears now: dark, light, or nothing yet.
-    static DRESSED: Cell<Option<bool>> = const { Cell::new(None) };
+    /// What the glass wears now, if anything yet.
+    static WORN: Cell<Option<Look>> = const { Cell::new(None) };
+    /// The kind and tint last read, and when: the file is not read every frame.
+    static CHOSEN: Cell<Option<(Instant, bool, f64)>> = const { Cell::new(None) };
+}
+
+/// What the glass should wear right now. The tone is asked every time, so
+/// the pill follows when the Mac changes mode. The file is read at most once
+/// a second.
+fn look() -> Look {
+    let (clear, tint) = CHOSEN.with(|cell| match cell.get() {
+        Some((read, clear, tint)) if read.elapsed() < Duration::from_secs(1) => (clear, tint),
+        _ => {
+            let (clear, tint) = chosen();
+            cell.set(Some((Instant::now(), clear, tint)));
+            (clear, tint)
+        }
+    });
+    Look {
+        dark: !system_is_dark(),
+        clear,
+        tint,
+    }
 }
 
 /// Is the Mac itself in dark mode right now? Asked of the user's own setting
@@ -206,11 +277,10 @@ pub fn place(ns_window: *mut c_void, frame: Frame) {
             content.addSubview_positioned_relativeTo(view, NSWindowOrderingMode::Below, None);
         }
 
-        // Asked every time, so the pill follows when the Mac changes mode.
-        let dark = !system_is_dark();
-        if DRESSED.get() != Some(dark) {
-            glass.dress(dark);
-            DRESSED.set(Some(dark));
+        let look = look();
+        if WORN.get() != Some(look) {
+            glass.dress(look);
+            WORN.set(Some(look));
         }
 
         let visible = frame.alpha > 0.01 && frame.width >= 1.0 && frame.height >= 1.0;
