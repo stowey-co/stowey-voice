@@ -23,9 +23,9 @@ use objc2::runtime::{AnyClass, NSObjectProtocol};
 use objc2::{msg_send, sel, MainThreadMarker};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-    NSColor, NSGlassEffectView, NSRunningApplication, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
-    NSWindowOrderingMode,
+    NSColor, NSGlassEffectView, NSGlassEffectViewStyle, NSRunningApplication, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{ns_string, NSBundle, NSPoint, NSRect, NSSize, NSUserDefaults};
 
@@ -56,9 +56,25 @@ const LIQUID_CLASS: &CStr = c"NSGlassEffectView";
 /// bars to read on any picture, little enough to stay glass.
 const TINT: f64 = 0.32;
 
+/// For the build machine's photographs only. STOWEY_GLASS picks the glass,
+/// "regular", "clear" or "frosted", and STOWEY_TINT its tint, so that several
+/// can be compared in one run. Nobody sets these on a real Mac.
+fn asked(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+fn tint() -> f64 {
+    asked("STOWEY_TINT")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(TINT)
+}
+
 /// Asked of the system itself instead of a version number: the class is
 /// either there or it is not. Safe from any thread.
 pub fn kind() -> Kind {
+    if asked("STOWEY_GLASS").as_deref() == Some("frosted") {
+        return Kind::Frosted;
+    }
     if AnyClass::get(LIQUID_CLASS).is_some() {
         Kind::Liquid
     } else {
@@ -74,7 +90,13 @@ enum Glass {
 impl Glass {
     fn new(mtm: MainThreadMarker) -> Self {
         match kind() {
-            Kind::Liquid => Glass::Liquid(NSGlassEffectView::new(mtm)),
+            Kind::Liquid => {
+                let view = NSGlassEffectView::new(mtm);
+                if asked("STOWEY_GLASS").as_deref() == Some("clear") {
+                    view.setStyle(NSGlassEffectViewStyle::Clear);
+                }
+                Glass::Liquid(view)
+            }
             Kind::Frosted => {
                 let view = NSVisualEffectView::new(mtm);
                 // Follows light and dark mode, and lets the most through.
@@ -111,7 +133,12 @@ impl Glass {
             Glass::Liquid(view) => {
                 view.setAppearance(appearance.as_deref());
                 let white = if dark { 0.0 } else { 1.0 };
-                view.setTintColor(Some(&NSColor::colorWithWhite_alpha(white, TINT)));
+                let strength = tint();
+                if strength > 0.0 {
+                    view.setTintColor(Some(&NSColor::colorWithWhite_alpha(white, strength)));
+                } else {
+                    view.setTintColor(None);
+                }
             }
             Glass::Frosted(view) => view.setAppearance(appearance.as_deref()),
         }

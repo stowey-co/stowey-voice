@@ -146,11 +146,13 @@ jobs:
             else
               defaults delete -g AppleInterfaceStyle 2>/dev/null || true
             fi
-            for state in listening working; do
-              STOWEY_SHOW_PILL="$state" "$APP/Contents/MacOS/handy" > "shots/app-$mode-$state.txt" 2>&1 &
+            # Several kinds of glass, to choose from by looking: the kind, then its tint.
+            for glass in regular:0.32 regular:0.15 regular:0 clear:0.3 clear:0.15 clear:0 frosted:0; do
+              STOWEY_GLASS="${glass%%:*}" STOWEY_TINT="${glass##*:}" STOWEY_SHOW_PILL=listening \
+                "$APP/Contents/MacOS/handy" > "shots/app-$mode-${glass%%:*}-${glass##*:}.txt" 2>&1 &
               PID=$!
-              sleep 14
-              screencapture -x "shots/screen-$mode-$state.png" || echo "screencapture failed for $mode $state"
+              sleep 13
+              screencapture -x "shots/screen-$mode-${glass%%:*}-${glass##*:}.png" || echo "screencapture failed for $mode $glass"
               kill "$PID" 2>/dev/null || true
               sleep 3
             done
