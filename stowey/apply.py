@@ -34,7 +34,7 @@ NAME = "Stowey\u00ae Voice"
 # The same without the mark, for the few places that only take plain ASCII.
 PLAIN_NAME = "Stowey Voice"
 IDENTIFIER = "co.stowey.voice"
-REPO = "RaphaelChemaly/stowey-voice"
+REPO = "stowey-co/stowey-voice"
 
 INK = "#0d0d0d"
 GROUND = "#e9e9e9"

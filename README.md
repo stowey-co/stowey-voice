@@ -6,12 +6,12 @@ Stowey® Voice is Stowey's build of [Handy](https://github.com/cjpais/Handy), th
 
 ## Download
 
-Get the latest build from the [releases page](https://github.com/RaphaelChemaly/stowey-voice/releases/latest).
+Get the latest build from the [releases page](https://github.com/stowey-co/stowey-voice/releases/latest).
 
 | Your Mac | Direct link |
 |---|---|
-| Apple silicon (M1 or newer) | https://github.com/RaphaelChemaly/stowey-voice/releases/latest/download/Stowey-Voice-apple-silicon.dmg |
-| Intel | https://github.com/RaphaelChemaly/stowey-voice/releases/latest/download/Stowey-Voice-intel.dmg |
+| Apple silicon (M1 or newer) | https://github.com/stowey-co/stowey-voice/releases/latest/download/Stowey-Voice-apple-silicon.dmg |
+| Intel | https://github.com/stowey-co/stowey-voice/releases/latest/download/Stowey-Voice-intel.dmg |
 
 Not sure which Mac you have? Apple menu, About This Mac. If the chip line starts with Apple, take the first file.
 
