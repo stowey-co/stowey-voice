@@ -18,16 +18,11 @@ Step 2 and 3 are needed once per download. They exist because this build is not 
 
 ## New in this build
 
-The app is now called Stowey® Voice: in Finder, in the Dock, in the menu bar and inside the app. The rest is as in the build before it.
+1. **The pill is real glass.** Smaller, translucent, and only the bars. It is dark in light mode and light in dark mode, so it stands out. Esc still cancels.
+2. **New sounds.** Low, soft and short. The higher note when it listens, the lower one when you let go.
+3. **It takes over from an older copy.** If an earlier build is still running, this one asks it to quit.
 
-1. **It works while you talk.** The speech is decoded at every pause, during the dictation. When you let go of the key, only the words since your last pause are left to do.
-2. **The cleanup model only runs where it earns its wait.** For an email, and for a text in which you corrected yourself or dictated a list. Everything else is tidied by rule and typed at once. A chat with an AI is typed as spoken.
-3. **A sound on press and on release.** The first one plays once the microphone really is recording. Switch them off under Settings, General, Audio Feedback.
-4. **The pill is glass.**
-5. **The Mac's own microphone is used** unless you choose another under Settings, or the lid is closed. It opens fastest.
-6. **Your private word file.** Names and terms in `~/Library/Logs/co.stowey.voice/vocabulary.txt`, one per line, are spelt right. They stay on your Mac.
-
-Updating from an earlier build: the app is now called Stowey® Voice, so it no longer replaces the old one. Quit Stowey Voice, move it from Applications to the Bin, drag the new one in, then do steps 2 and 3 above once more. macOS will also ask for Accessibility again. Your settings, history and word file stay.
+Updating from an earlier build: drag the new one into Applications and replace the old one, then do steps 2 and 3 above once more. macOS will also ask for Accessibility again. Your settings, history and word file stay. If an app called Stowey Voice, without the mark, is still in Applications, move it to the Bin.
 
 ## Good to know
 

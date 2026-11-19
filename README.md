@@ -33,9 +33,10 @@ Steps 2 and 3 are needed once per download, because the build is not yet signed 
 5. **Stowey house style, enforced.** No dashes, no exclamation marks, British English. A deterministic gate runs last, so a stray dash never reaches the page. Document numbers, SKUs, dates, URLs and command flags keep their own characters. The gate stays out of terminals and code editors.
 6. **It knows your words.** The speech model is told how Stowey is spelt, next to your custom words and your private word file. See below.
 7. **It uses the Mac's own microphone.** It opens fastest. A Bluetooth headset needs a second or more to switch into call mode and then sends telephone quality sound, and a display's microphone takes about half a second to open each time. With the lid closed, or with a microphone chosen under Settings, yours is used instead.
-8. **It tells you when it listens.** A soft sound plays once the microphone really is recording, and another when you let go. Switch them off under Settings, General, Audio Feedback.
-9. **The pill is glass.** Monochrome, with a light edge and a shadow. Its look lives in `stowey/pill.css`.
+8. **It tells you when it listens.** A low, soft sound plays once the microphone really is recording, and a lower one when you let go. Switch them off under Settings, General, Audio Feedback.
+9. **The pill is glass.** Small, translucent, and only the bars. macOS draws the glass itself: Apple's own from macOS 26, a frosted one before. It wears the opposite of your Mac's mode, dark in light mode and light in dark mode, so it stands out. To change how see through it is without a new build, put a file named `pill.txt` beside the app's log, in `~/Library/Logs/co.stowey.voice/`, with lines such as `glass = clear` or `glass = regular`, and `tint = 0.2`.
 10. **It never updates itself into stock Handy.** New versions come from this repository only.
+11. **It takes over from an older copy.** If an earlier build is still running under the old name Stowey Voice, the new one asks it to quit. Otherwise the old one would keep answering the shortcut.
 
 The cleanup model is Apple Intelligence, on the Mac itself. That needs an Apple silicon Mac on macOS 26 or newer with Apple Intelligence switched on. On other Macs everything else still works. Any provider Handy supports can be selected instead under Settings, Post Process.
 
@@ -53,13 +54,16 @@ Ask your Claude to build it from the names you use most. It can write to the fir
 
 ## How this repository works
 
-The fork is a thin overlay. Upstream's sources stay untouched in git. Everything Stowey adds lives in six places:
+The fork is a thin overlay. Upstream's sources stay untouched in git. Everything Stowey adds lives in nine places:
 
 | Path | What it is |
 |---|---|
 | `stowey/stowey.rs` | The native module: defaults, destinations, cleanup policy, tidy rules, prompt, vocabulary, microphone choice, house style gate, with tests |
 | `stowey/stowey_live.rs` | Cuts a live recording at every pause so it is decoded while you talk, and joins the pieces, with tests |
-| `stowey/pill.css` | The look of the recording pill |
+| `stowey/pill.css` | The parts of the recording pill: bars, spinner, sizes. Not the glass |
+| `stowey/stowey_mac.rs` | What only macOS can do: the glass behind the pill, and asking an older copy of the app to quit |
+| `stowey/stowey_glass.rs` | Lets the pill tell the app where it is, so the glass can follow it |
+| `stowey/stoweyGlass.ts` | The script in the pill's web view that does the telling |
 | `stowey/apply.py` | Applies the overlay to a clean checkout: wires the modules in, adds the warm up call to the Apple Intelligence bridge, draws the two sounds and the icons, renames the app, sets the palette and typeface |
 | `.github/workflows/stowey-voice.yml` | Builds both apps on GitHub's Mac build machines, tests the module and publishes a release |
 | `README.md` | This file |
