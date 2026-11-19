@@ -9,14 +9,16 @@ Stowey® Voice for macOS. Hold a key, speak, and clean text is typed into whatev
 
 ## Install
 
-1. Open the downloaded file and drag Stowey Voice into Applications.
-2. Open Stowey Voice. macOS says it cannot verify the app. Click Done.
-3. Open System Settings, then Privacy & Security. Scroll down and click Open Anyway next to Stowey Voice. Confirm once.
+1. Open the downloaded file and drag Stowey® Voice into Applications.
+2. Open Stowey® Voice. macOS says it cannot verify the app. Click Done.
+3. Open System Settings, then Privacy & Security. Scroll down and click Open Anyway next to Stowey® Voice. Confirm once.
 4. Follow the setup inside the app. It asks for the microphone and for Accessibility, which it needs to type for you.
 
 Step 2 and 3 are needed once per download. They exist because this build is not yet signed with an Apple Developer account.
 
 ## New in this build
+
+The app is now called Stowey® Voice: in Finder, in the Dock, in the menu bar and inside the app. The rest is as in the build before it.
 
 1. **It works while you talk.** The speech is decoded at every pause, during the dictation. When you let go of the key, only the words since your last pause are left to do.
 2. **The cleanup model only runs where it earns its wait.** For an email, and for a text in which you corrected yourself or dictated a list. Everything else is tidied by rule and typed at once. A chat with an AI is typed as spoken.
@@ -25,7 +27,7 @@ Step 2 and 3 are needed once per download. They exist because this build is not 
 5. **The Mac's own microphone is used** unless you choose another under Settings, or the lid is closed. It opens fastest.
 6. **Your private word file.** Names and terms in `~/Library/Logs/co.stowey.voice/vocabulary.txt`, one per line, are spelt right. They stay on your Mac.
 
-Updating from an earlier build: quit Stowey Voice, drag the new one into Applications and replace the old one, then do steps 2 and 3 above once more. macOS will also ask for Accessibility again. Your settings and history stay.
+Updating from an earlier build: the app is now called Stowey® Voice, so it no longer replaces the old one. Quit Stowey Voice, move it from Applications to the Bin, drag the new one in, then do steps 2 and 3 above once more. macOS will also ask for Accessibility again. Your settings, history and word file stay.
 
 ## Good to know
 

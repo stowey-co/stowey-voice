@@ -30,7 +30,9 @@ OVERLAY = ROOT / "stowey"
 TAURI = ROOT / "src-tauri"
 SRC = ROOT / "src"
 
-NAME = "Stowey Voice"
+NAME = "Stowey\u00ae Voice"
+# The same without the mark, for the few places that only take plain ASCII.
+PLAIN_NAME = "Stowey Voice"
 IDENTIFIER = "co.stowey.voice"
 REPO = "RaphaelChemaly/stowey-voice"
 
@@ -242,7 +244,7 @@ def patch_rust() -> None:
     patch(
         src / "llm_client.rs",
         'headers.insert("X-Title", HeaderValue::from_static("Handy"));',
-        f'headers.insert("X-Title", HeaderValue::from_static("{NAME}"));',
+        f'headers.insert("X-Title", HeaderValue::from_static("{PLAIN_NAME}"));',
     )
 
 
@@ -799,7 +801,7 @@ def main() -> None:
     patch_pill()
     draw_brand_images()
     marker.write_text("applied\n", encoding="utf-8")
-    print(f"{NAME}: overlay applied.")
+    print(f"{PLAIN_NAME}: overlay applied.")
 
 
 if __name__ == "__main__":

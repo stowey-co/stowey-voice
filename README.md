@@ -2,7 +2,7 @@
 
 Dictation for macOS, built for the Stowey team. Hold a key, speak, and clean text is typed into whatever app you are in.
 
-Stowey Voice is Stowey's build of [Handy](https://github.com/cjpais/Handy), the open source speech to text app by CJ Pais. Transcription and cleanup run on the Mac. Nothing is sent to a server.
+Stowey® Voice is Stowey's build of [Handy](https://github.com/cjpais/Handy), the open source speech to text app by CJ Pais. Transcription and cleanup run on the Mac. Nothing is sent to a server.
 
 ## Download
 
@@ -17,9 +17,9 @@ Not sure which Mac you have? Apple menu, About This Mac. If the chip line starts
 
 ## Install
 
-1. Open the downloaded file and drag Stowey Voice into Applications.
-2. Open Stowey Voice. macOS says it cannot verify the app. Click Done.
-3. Open System Settings, then Privacy & Security. Scroll down and click Open Anyway next to Stowey Voice. Confirm once.
+1. Open the downloaded file and drag Stowey® Voice into Applications.
+2. Open Stowey® Voice. macOS says it cannot verify the app. Click Done.
+3. Open System Settings, then Privacy & Security. Scroll down and click Open Anyway next to Stowey® Voice. Confirm once.
 4. Follow the setup inside the app. It asks for the microphone and for Accessibility, which it needs to type for you.
 
 Steps 2 and 3 are needed once per download, because the build is not yet signed with an Apple Developer account. After an update, macOS asks for the Accessibility permission again for the same reason.
@@ -68,7 +68,7 @@ Every patch in `apply.py` asserts that its anchor still exists. If an upstream c
 
 ### Build a new version
 
-Push a change under `stowey/`, or run the Stowey Voice workflow by hand from the Actions tab. The build takes up to an hour. The new release replaces the latest one only when both installers are attached and the tests pass, so the download links above never break.
+Push a change under `stowey/`, or run the Stowey® Voice workflow by hand from the Actions tab. The build takes up to an hour. The new release replaces the latest one only when both installers are attached and the tests pass, so the download links above never break.
 
 ### Pull in a new Handy release
 

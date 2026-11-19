@@ -37,7 +37,7 @@ use tauri::{AppHandle, Manager};
 
 pub const PROMPT_ID: &str = "stowey_voice";
 
-const PROMPT_NAME: &str = "Stowey Voice";
+const PROMPT_NAME: &str = "Stowey\u{ae} Voice";
 
 /// Kept short on purpose. The on device model reads every word of it before
 /// it writes one, and the user is waiting.
@@ -244,19 +244,23 @@ pub fn default_selected_prompt_id() -> Option<String> {
 }
 
 /// Bump when `seed` changes. An install applies each version once.
-const SEED_VERSION: u32 = 2;
+const SEED_VERSION: u32 = 3;
 const SEED_FILE: &str = "stowey-seed";
 static SEEDED: AtomicBool = AtomicBool::new(false);
 
 /// Stowey's settings on top of whatever is stored. Safe to run twice.
-fn seed(settings: &mut AppSettings) {
+/// `applied` is the seed version this install already has: a choice the user
+/// may have changed since is only made once, by the version that brought it.
+fn seed(settings: &mut AppSettings, applied: u32) {
     // A sound on press, once the microphone really is listening, and one on
     // release. `stowey/apply.py` puts Stowey's own two sounds in this theme.
-    settings.audio_feedback = true;
-    settings.sound_theme = SoundTheme::Pop;
-    // Keep the speech model in memory: reloading it after a pause costs seconds.
-    if matches!(settings.model_unload_timeout, ModelUnloadTimeout::Min5) {
-        settings.model_unload_timeout = ModelUnloadTimeout::Never;
+    if applied < 2 {
+        settings.audio_feedback = true;
+        settings.sound_theme = SoundTheme::Pop;
+        // Keep the speech model in memory: reloading it after a pause costs seconds.
+        if matches!(settings.model_unload_timeout, ModelUnloadTimeout::Min5) {
+            settings.model_unload_timeout = ModelUnloadTimeout::Never;
+        }
     }
     match settings
         .post_process_prompts
@@ -296,7 +300,7 @@ pub fn migrate(app: &AppHandle, settings: &mut AppSettings) -> bool {
     if applied >= SEED_VERSION {
         return false;
     }
-    seed(settings);
+    seed(settings, applied);
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(&marker, SEED_VERSION.to_string());
     true
@@ -1605,12 +1609,20 @@ mod tests {
     #[test]
     fn seeding_is_idempotent() {
         let mut settings = crate::settings::get_default_settings();
-        seed(&mut settings);
-        seed(&mut settings);
+        seed(&mut settings, 0);
+        seed(&mut settings, 0);
         // The house names never land in the user's own list.
         assert!(settings.custom_words.is_empty());
         assert!(settings.audio_feedback);
         assert!(matches!(settings.sound_theme, SoundTheme::Pop));
+        assert!(settings
+            .post_process_prompts
+            .iter()
+            .any(|prompt| prompt.name == "Stowey\u{ae} Voice"));
+        // Someone who switched the sounds off keeps them off through an update.
+        settings.audio_feedback = false;
+        seed(&mut settings, 2);
+        assert!(!settings.audio_feedback);
         assert!(matches!(
             settings.model_unload_timeout,
             ModelUnloadTimeout::Never
@@ -1630,7 +1642,7 @@ mod tests {
     #[test]
     fn the_prompt_names_the_vocabulary() {
         let mut settings = crate::settings::get_default_settings();
-        seed(&mut settings);
+        seed(&mut settings, 0);
         let filled = fill_with(PROMPT, &settings, "");
         assert!(filled.contains("Stowey"));
         assert!(!filled.contains("${vocabulary}"));

@@ -1,4 +1,4 @@
-name: Stowey Voice
+name: Stowey® Voice
 
 # Builds the macOS app, tests it and publishes it as a release.
 # Runs when the Stowey overlay changes, or by hand from the Actions tab.
@@ -77,7 +77,9 @@ jobs:
               exit 0
             fi
             echo "::warning::Build attempt $attempt failed."
-            hdiutil detach "/Volumes/Stowey Voice" -force 2>/dev/null || true
+            for volume in /Volumes/Stowey*; do
+              hdiutil detach "$volume" -force 2>/dev/null || true
+            done
             rm -f "src-tauri/target/${{ matrix.target }}/release/bundle/dmg/"rw.*.dmg 2>/dev/null || true
             sleep 20
           done
@@ -85,7 +87,8 @@ jobs:
 
       - name: Inspect the app
         run: |
-          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Stowey Voice.app"
+          APP="$(ls -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/"*.app | head -1)"
+          echo "app: $APP"
           ls "$APP/Contents/MacOS"
           /usr/libexec/PlistBuddy -c "Print :CFBundleName" -c "Print :CFBundleIdentifier" -c "Print :CFBundleShortVersionString" -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
           BIN="$(find "$APP/Contents/MacOS" -type f -perm +111 | head -1)"
@@ -104,7 +107,8 @@ jobs:
       - name: Start the app once
         if: matrix.target == 'x86_64-apple-darwin'
         run: |
-          "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Stowey Voice.app/Contents/MacOS/handy" --help
+          APP="$(ls -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/"*.app | head -1)"
+          "$APP/Contents/MacOS/handy" --help
 
       - name: Collect the installer
         run: |
@@ -129,7 +133,7 @@ jobs:
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Stowey Voice ${TAG}" \
+            --title "Stowey® Voice ${TAG}" \
             --notes-file stowey/RELEASE_NOTES.md \
             --prerelease || echo "Release ${TAG} already exists, adding to it."
           gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
