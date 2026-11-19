@@ -59,6 +59,13 @@ def patch_rust() -> None:
     lib = src / "lib.rs"
     patch(lib, "mod signal_handle;\n", "mod signal_handle;\nmod stowey;\n")
     patch(lib, '.title("Handy")', f'.title("{NAME}")')
+    # Load the speech model at launch and start watching the microphones.
+    patch(
+        lib,
+        "    app_handle.manage(TranscriptionJobManager::new(app_handle));\n",
+        "    app_handle.manage(TranscriptionJobManager::new(app_handle));\n"
+        "    crate::stowey::warm_start(app_handle);\n",
+    )
 
     actions = src / "actions.rs"
     # 1. The normal dictation shortcut cleans up by default.
@@ -73,7 +80,7 @@ def patch_rust() -> None:
         actions,
         "    if prompt.trim().is_empty() {\n"
         '        debug!("Post-processing skipped because the selected prompt is empty");',
-        "    let prompt = crate::stowey::with_context(&prompt);\n"
+        "    let prompt = crate::stowey::fill_prompt(&prompt, settings);\n"
         "    if prompt.trim().is_empty() {\n"
         '        debug!("Post-processing skipped because the selected prompt is empty");',
     )
@@ -90,7 +97,62 @@ def patch_rust() -> None:
         "                                ),",
     )
 
+    # 4. The moment a dictation starts, note where the text is going and get
+    #    the cleanup model ready while the user is still speaking.
+    patch(
+        actions,
+        "    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {\n",
+        "    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {\n"
+        "        crate::stowey::prewarm(app.clone());\n",
+    )
+    # 5. A short dictation with nothing to clean goes straight through. The
+    #    model would only add a wait.
+    patch(
+        actions,
+        '        debug!("Post-processing skipped because the transcription is empty");\n'
+        "        return PostProcessOutcome::Skipped;\n"
+        "    }\n",
+        '        debug!("Post-processing skipped because the transcription is empty");\n'
+        "        return PostProcessOutcome::Skipped;\n"
+        "    }\n"
+        "    if crate::stowey::skip_cleanup(transcription) {\n"
+        '        debug!("Post-processing skipped: short and clean");\n'
+        "        return PostProcessOutcome::Skipped;\n"
+        "    }\n",
+    )
+
+    # 6. With no microphone chosen in Settings, a Bluetooth headset yields to
+    #    the Mac's own microphone. The clamshell variant is the one that falls
+    #    back to the system default without touching the stored choice.
+    patch(
+        src / "managers" / "audio.rs",
+        "            None => DesiredMicrophone::Default,\n",
+        "            None => match crate::stowey::preferred_microphone() {\n"
+        "                Some(name) => DesiredMicrophone::Clamshell(name),\n"
+        "                None => DesiredMicrophone::Default,\n"
+        "            },\n",
+    )
+    # 7. Stowey's names go to the speech model with the user's custom words.
+    patch(
+        src / "managers" / "transcription.rs",
+        "    if supports_vocabulary {\n        custom_words.to_vec()\n",
+        "    if supports_vocabulary {\n        crate::stowey::with_house_vocabulary(custom_words)\n",
+    )
+
     settings = src / "settings.rs"
+    # Stowey's prompt and speed settings, applied once per install.
+    patch(
+        settings,
+        "    if ensure_post_process_defaults(&mut settings) {\n"
+        '        store.set("settings", serde_json::to_value(&settings).unwrap());\n'
+        "    }\n",
+        "    if ensure_post_process_defaults(&mut settings) {\n"
+        '        store.set("settings", serde_json::to_value(&settings).unwrap());\n'
+        "    }\n"
+        "    if crate::stowey::migrate(app, &mut settings) {\n"
+        '        store.set("settings", serde_json::to_value(&settings).unwrap());\n'
+        "    }\n",
+    )
     patch(
         settings,
         "fn default_post_process_enabled() -> bool {\n    false\n}",
@@ -176,6 +238,93 @@ def patch_build_script() -> None:
         "    }\n",
     )
     patch(build, gate, '#[cfg(target_os = "macos")]', count=2)
+
+
+SWIFT_WARM_SESSION = '''
+
+// ---------------------------------------------------------------------------
+// Stowey Voice: get a session ready while the user is still speaking.
+//
+// Loading the model and reading the instructions is most of the wait after a
+// dictation. `stowey_prewarm_apple_intelligence` does both the moment the
+// recording starts; the cleanup call above then picks the warm session up,
+// provided its instructions are word for word the same.
+// ---------------------------------------------------------------------------
+
+@available(macOS 26.0, *)
+private final class StoweyWarmSession: @unchecked Sendable {
+    static let shared = StoweyWarmSession()
+    private let lock = NSLock()
+    private var session: LanguageModelSession?
+    private var instructions: String?
+
+    func warm(_ newInstructions: String) {
+        lock.lock()
+        let alreadyWarm = session != nil && instructions == newInstructions
+        lock.unlock()
+        if alreadyWarm { return }
+
+        let model = SystemLanguageModel.default
+        guard model.availability == .available else { return }
+        let fresh = LanguageModelSession(model: model, instructions: newInstructions)
+        fresh.prewarm()
+        lock.lock()
+        session = fresh
+        instructions = newInstructions
+        lock.unlock()
+    }
+
+    func take(_ wanted: String) -> LanguageModelSession? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard instructions == wanted, let ready = session else { return nil }
+        session = nil
+        instructions = nil
+        return ready
+    }
+}
+
+@_cdecl("stowey_prewarm_apple_intelligence")
+public func stoweyPrewarmAppleIntelligence(_ systemPrompt: UnsafePointer<CChar>) {
+    guard #available(macOS 26.0, *) else { return }
+    StoweyWarmSession.shared.warm(String(cString: systemPrompt))
+}
+'''
+
+SWIFT_WARM_STUB = '''
+
+// Stowey Voice: nothing to warm up in a build without Apple Intelligence.
+@_cdecl("stowey_prewarm_apple_intelligence")
+public func stoweyPrewarmAppleIntelligence(_ systemPrompt: UnsafePointer<CChar>) {
+}
+'''
+
+
+def patch_swift() -> None:
+    """Adds session warm up to the Apple Intelligence bridge, real and stub."""
+    real = TAURI / "swift" / "apple_intelligence.swift"
+    patch(
+        real,
+        "            let session = LanguageModelSession(\n"
+        "                model: model,\n"
+        "                instructions: swiftSystemPrompt\n"
+        "            )\n",
+        "            let session = StoweyWarmSession.shared.take(swiftSystemPrompt)\n"
+        "                ?? LanguageModelSession(\n"
+        "                    model: model,\n"
+        "                    instructions: swiftSystemPrompt\n"
+        "                )\n",
+    )
+    real.write_text(real.read_text(encoding="utf-8") + SWIFT_WARM_SESSION, encoding="utf-8")
+
+    stub = TAURI / "swift" / "apple_intelligence_stub.swift"
+    # Fails loudly if upstream renames the bridge, like every other patch here.
+    patch(
+        stub,
+        '@_cdecl("process_text_with_system_prompt_apple")',
+        '@_cdecl("process_text_with_system_prompt_apple")',
+    )
+    stub.write_text(stub.read_text(encoding="utf-8") + SWIFT_WARM_STUB, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +680,7 @@ def main() -> None:
     if marker.exists():
         sys.exit("stowey/apply.py: already applied. Run it on a clean checkout.")
     patch_rust()
+    patch_swift()
     patch_build_script()
     patch_identity()
     patch_strings()

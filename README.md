@@ -2,7 +2,7 @@
 
 Dictation for macOS, built for the Stowey team. Hold a key, speak, and clean text is typed into whatever app you are in.
 
-Stowey Voice is Stowey's build of [Handy](https://github.com/cjpais/Handy), the open source speech to text app by CJ Pais. Transcription runs on the Mac. Nothing is sent to a server.
+Stowey Voice is Stowey's build of [Handy](https://github.com/cjpais/Handy), the open source speech to text app by CJ Pais. Transcription and cleanup run on the Mac. Nothing is sent to a server.
 
 ## Download
 
@@ -30,7 +30,10 @@ Steps 2 and 3 are needed once per download, because the build is not yet signed 
 2. **It knows where you are typing.** The app and window in focus are handed to the cleanup model, so a chat message reads like a chat message and an email reads like an email.
 3. **It removes what you did not mean to write.** Filler words, repeats and self corrections go. "At three, no wait, at four" becomes "at 4".
 4. **Stowey house style, enforced.** No dashes, no exclamation marks, British English. A deterministic gate runs after the model, so a stray dash never reaches the page. Document numbers, SKUs, dates, URLs and command flags keep their own characters. The gate stays out of terminals and code editors.
-5. **It never updates itself into stock Handy.** New versions come from this repository only.
+5. **It knows the name Stowey.** The speech model and the cleanup model are both told how it is spelt, next to your own custom words. Names of colleagues, customers and suppliers are not in this public code: add them once under Settings, Custom Words, and they stay on your Mac.
+6. **It is built to be quick.** The speech model loads when the app starts and stays loaded. The cleanup model is warmed up while you are still speaking. A short sentence with nothing to clean, no filler, no repeat, no correction, skips the model and is typed at once.
+7. **It picks the better microphone.** A Bluetooth headset such as AirPods needs a second or more to switch into call mode and then sends telephone quality sound, which costs the first words and the accuracy. When the Mac's input is a Bluetooth headset and no microphone is chosen in Settings, Stowey Voice records from the Mac's own microphone instead. Choose a microphone under Settings to overrule this.
+8. **It never updates itself into stock Handy.** New versions come from this repository only.
 
 Cleanup uses Apple Intelligence, on the Mac itself. That needs an Apple silicon Mac on macOS 26 or newer with Apple Intelligence switched on. On other Macs dictation still works and the house style gate still runs, without the model. Any provider Handy supports can be selected instead under Settings, Post Processing.
 
@@ -42,8 +45,8 @@ The fork is a thin overlay. Upstream's sources stay untouched in git. Everything
 
 | Path | What it is |
 |---|---|
-| `stowey/stowey.rs` | The native module: defaults, context, prompt, house style gate, with tests |
-| `stowey/apply.py` | Applies the overlay to a clean checkout: wires the module in, renames the app, draws the icons, sets the palette and typeface |
+| `stowey/stowey.rs` | The native module: defaults, context, prompt, vocabulary, microphone choice, speed, house style gate, with tests |
+| `stowey/apply.py` | Applies the overlay to a clean checkout: wires the module in, adds the warm up call to the Apple Intelligence bridge, renames the app, draws the icons, sets the palette and typeface |
 | `.github/workflows/stowey-voice.yml` | Builds both apps on GitHub's Mac build machines, tests the module and publishes a release |
 | `README.md` | This file |
 
