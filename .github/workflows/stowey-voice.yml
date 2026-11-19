@@ -1,0 +1,94 @@
+name: Stowey Voice
+
+# Builds the macOS app and publishes it as a release.
+# Runs when the Stowey overlay changes, or by hand from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "stowey/**"
+      - ".github/workflows/stowey-voice.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stowey-voice-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS 26 carries the Apple Intelligence SDK the cleanup model needs.
+          - platform: macos-26
+            target: aarch64-apple-darwin
+            label: apple-silicon
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            label: intel
+    runs-on: ${{ matrix.platform }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: stowey-${{ matrix.target }}
+          cache-bin: false
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Apply the Stowey overlay
+        run: |
+          python3 -m venv .stowey-venv
+          .stowey-venv/bin/pip install --quiet pillow
+          .stowey-venv/bin/python stowey/apply.py
+
+      - name: Generate the app icon set
+        run: bun run tauri icon stowey/build/app-icon.png
+
+      - name: Build the app
+        run: bun run tauri build --target ${{ matrix.target }}
+
+      - name: Collect the installer
+        run: |
+          mkdir -p out
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg "out/Stowey-Voice-${{ matrix.label }}.dmg"
+          ls -la out
+
+      - name: Keep the installer as a build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: stowey-voice-${{ matrix.label }}
+          path: out/*.dmg
+          retention-days: 30
+
+      - name: Publish to the release
+        run: |
+          VERSION=$(grep -o '"version": "[^"]*"' src-tauri/tauri.conf.json | head -1 | cut -d'"' -f4)
+          TAG="v${VERSION}-stowey.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Stowey Voice ${TAG}" \
+            --notes-file stowey/RELEASE_NOTES.md \
+            --latest || echo "Release ${TAG} already exists, adding to it."
+          gh release upload "$TAG" out/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
