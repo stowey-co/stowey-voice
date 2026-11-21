@@ -62,10 +62,15 @@ def patch_rust() -> None:
     shutil.copyfile(OVERLAY / "stowey.rs", src / "stowey.rs")
     shutil.copyfile(OVERLAY / "stowey_live.rs", src / "stowey_live.rs")
     shutil.copyfile(OVERLAY / "stowey_glass.rs", src / "stowey_glass.rs")
+    shutil.copyfile(OVERLAY / "stowey_keys.rs", src / "stowey_keys.rs")
     shutil.copyfile(OVERLAY / "stowey_mac.rs", src / "stowey_mac.rs")
 
     lib = src / "lib.rs"
-    patch(lib, "mod signal_handle;\n", "mod signal_handle;\nmod stowey;\nmod stowey_glass;\nmod stowey_live;\n")
+    patch(
+        lib,
+        "mod signal_handle;\n",
+        "mod signal_handle;\nmod stowey;\nmod stowey_glass;\nmod stowey_keys;\nmod stowey_live;\n",
+    )
     # The overlay's web view tells the app where the pill is, for the glass.
     patch(
         lib,
@@ -186,6 +191,130 @@ def patch_rust() -> None:
         transcription,
         "            chunking::join_transcripts(&many.iter().map(|t| t.text.as_str()).collect::<Vec<_>>())\n",
         "            crate::stowey_live::join(&many.iter().map(|t| t.text.as_str()).collect::<Vec<_>>())\n",
+    )
+
+    # 10. One shortcut copies the last dictation, Fn and C unless changed.
+    #     `stowey_keys.rs` explains why it runs through the coordinator.
+    patch(
+        src / "settings.rs",
+        '            default_binding: "escape".to_string(),\n'
+        '            current_binding: "escape".to_string(),\n'
+        "        },\n"
+        "    );\n",
+        '            default_binding: "escape".to_string(),\n'
+        '            current_binding: "escape".to_string(),\n'
+        "        },\n"
+        "    );\n"
+        "    bindings.insert(\n"
+        "        crate::stowey_keys::BINDING.to_string(),\n"
+        "        crate::stowey_keys::binding(),\n"
+        "    );\n",
+    )
+    patch(
+        actions,
+        "    map.insert(\n"
+        '        "test".to_string(),\n'
+        "        Arc::new(TestAction) as Arc<dyn ShortcutAction>,\n"
+        "    );\n",
+        "    map.insert(\n"
+        '        "test".to_string(),\n'
+        "        Arc::new(TestAction) as Arc<dyn ShortcutAction>,\n"
+        "    );\n"
+        "    map.insert(\n"
+        "        crate::stowey_keys::BINDING.to_string(),\n"
+        "        Arc::new(crate::stowey_keys::CopyLast) as Arc<dyn ShortcutAction>,\n"
+        "    );\n",
+    )
+    # The text as it is typed is what "the last dictation" means.
+    patch(
+        actions,
+        "                            if final_text.is_empty() {\n"
+        "                                finish_without_text(&ah, input_silent, sample_count, stop_time);\n",
+        "                            crate::stowey_keys::remember(&final_text);\n"
+        "                            if final_text.is_empty() {\n"
+        "                                finish_without_text(&ah, input_silent, sample_count, stop_time);\n",
+    )
+    # The menu bar item gives the same text as the shortcut.
+    patch(
+        lib,
+        '            "copy_last_transcript" => {\n'
+        "                tray::copy_last_transcript(app);\n",
+        '            "copy_last_transcript" => {\n'
+        "                crate::stowey_keys::copy_last(app);\n",
+    )
+    coordinator = src / "transcription_coordinator.rs"
+    patch(
+        coordinator,
+        "enum Command {\n"
+        "    Input(InputEvent),\n"
+        "    Cancel { recording_was_active: bool },\n"
+        "    ProcessingFinished,\n"
+        "}\n",
+        "enum Command {\n"
+        "    Input(InputEvent),\n"
+        "    Cancel { recording_was_active: bool },\n"
+        "    ProcessingFinished,\n"
+        "    /// Stowey Voice: the copy shortcut was pressed at `at`.\n"
+        "    StoweyCopy { at: Instant },\n"
+        "}\n",
+    )
+    patch(
+        coordinator,
+        "                        Command::ProcessingFinished => {\n"
+        "                            if let Some(effect) = state.on_processing_finished() {\n"
+        "                                run_effect(&app, &mut state, effect);\n"
+        "                            }\n"
+        "                        }\n",
+        "                        Command::ProcessingFinished => {\n"
+        "                            if let Some(effect) = state.on_processing_finished() {\n"
+        "                                run_effect(&app, &mut state, effect);\n"
+        "                            }\n"
+        "                            crate::stowey_keys::typed(&app);\n"
+        "                        }\n"
+        "                        Command::StoweyCopy { at } => {\n"
+        "                            let facts = crate::stowey_keys::Facts {\n"
+        "                                recording: match (&state.stage, state.hold.as_ref()) {\n"
+        "                                    (Stage::Recording(id), Some(hold)) => Some((\n"
+        "                                        id.clone(),\n"
+        "                                        at.saturating_duration_since(hold.pressed_at),\n"
+        "                                        hold.locked,\n"
+        "                                    )),\n"
+        "                                    (Stage::Recording(id), None) => {\n"
+        "                                        Some((id.clone(), Duration::MAX, true))\n"
+        "                                    }\n"
+        "                                    _ => None,\n"
+        "                                },\n"
+        "                                typing: matches!(state.stage, Stage::Processing),\n"
+        "                                waiting_key: state\n"
+        "                                    .pending_press\n"
+        "                                    .as_ref()\n"
+        "                                    .map(|pending| pending.binding_id.clone()),\n"
+        "                            };\n"
+        "                            let verdict = crate::stowey_keys::on_copy_key(&app, facts);\n"
+        "                            if verdict.decision\n"
+        "                                == crate::stowey_keys::Decision::DropRecordingThenCopy\n"
+        "                            {\n"
+        "                                state.on_cancel(true);\n"
+        "                            }\n"
+        "                            if verdict.forget_waiting_key {\n"
+        "                                state.pending_press = None;\n"
+        "                                state.pending_release = None;\n"
+        "                            }\n"
+        "                        }\n",
+    )
+    patch(
+        coordinator,
+        "    pub fn notify_processing_finished(&self) {\n",
+        "    /// Stowey Voice: the copy shortcut joins the queue of the dictation\n"
+        "    /// keys, so it is judged against a settled state.\n"
+        "    pub fn stowey_copy(&self) {\n"
+        "        let at = Instant::now();\n"
+        "        if self.tx.send(Command::StoweyCopy { at }).is_err() {\n"
+        '            warn!("Transcription coordinator channel closed");\n'
+        "        }\n"
+        "    }\n"
+        "\n"
+        "    pub fn notify_processing_finished(&self) {\n",
     )
 
     settings = src / "settings.rs"
@@ -516,6 +645,17 @@ def patch_strings() -> None:
     )
 
 
+def patch_settings_screen() -> None:
+    """The copy shortcut gets its row in Settings, under the other shortcuts.
+    Its name and description come from `stowey_keys.rs`."""
+    patch(
+        SRC / "components" / "settings" / "general" / "GeneralSettings.tsx",
+        '        {!isLinux && <ShortcutInput shortcutId="cancel" grouped={true} />}\n',
+        '        {!isLinux && <ShortcutInput shortcutId="cancel" grouped={true} />}\n'
+        '        <ShortcutInput shortcutId="copy_last_transcript" grouped={true} />\n',
+    )
+
+
 # ---------------------------------------------------------------------------
 # Look: monochrome palette, Archivo, Stowey marks
 # ---------------------------------------------------------------------------
@@ -839,6 +979,7 @@ def main() -> None:
     patch_build_script()
     patch_identity()
     patch_strings()
+    patch_settings_screen()
     write_components()
     patch_theme()
     patch_sounds()

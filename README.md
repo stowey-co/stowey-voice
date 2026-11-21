@@ -37,6 +37,7 @@ Steps 2 and 3 are needed once per download, because the build is not yet signed 
 9. **The pill is glass.** Small, translucent, and only the bars. macOS draws the glass itself: Apple's own from macOS 26, a frosted one before. It wears the opposite of your Mac's mode, dark in light mode and light in dark mode, so it stands out. To change how see through it is without a new build, put a file named `pill.txt` beside the app's log, in `~/Library/Logs/co.stowey.voice/`, with lines such as `glass = clear` or `glass = regular`, and `tint = 0.2`.
 10. **It never updates itself into stock Handy.** New versions come from this repository only.
 11. **It takes over from an older copy.** If an earlier build is still running under the old name Stowey Voice, the new one asks it to quit. Otherwise the old one would keep answering the shortcut.
+12. **Fn and C copies your last dictation.** The text as it was typed lands on the clipboard, ready to paste again. If a dictation is still being typed, it waits and takes that one. The keys can be changed under Settings, General, like the dictation shortcut. Good to know: macOS uses the same pair for Control Centre, so pick another pair there if both answer.
 
 The cleanup model is Apple Intelligence, on the Mac itself. That needs an Apple silicon Mac on macOS 26 or newer with Apple Intelligence switched on. On other Macs everything else still works. Any provider Handy supports can be selected instead under Settings, Post Process.
 
@@ -54,12 +55,13 @@ Ask your Claude to build it from the names you use most. It can write to the fir
 
 ## How this repository works
 
-The fork is a thin overlay. Upstream's sources stay untouched in git. Everything Stowey adds lives in nine places:
+The fork is a thin overlay. Upstream's sources stay untouched in git. Everything Stowey adds lives in ten places:
 
 | Path | What it is |
 |---|---|
 | `stowey/stowey.rs` | The native module: defaults, destinations, cleanup policy, tidy rules, prompt, vocabulary, microphone choice, house style gate, with tests |
 | `stowey/stowey_live.rs` | Cuts a live recording at every pause so it is decoded while you talk, and joins the pieces, with tests |
+| `stowey/stowey_keys.rs` | The shortcut that copies the last dictation, and what it does when its Fn has just set a dictation off, with tests |
 | `stowey/pill.css` | The parts of the recording pill: bars, spinner, sizes. Not the glass |
 | `stowey/stowey_mac.rs` | What only macOS can do: the glass behind the pill, and asking an older copy of the app to quit |
 | `stowey/stowey_glass.rs` | Lets the pill tell the app where it is, so the glass can follow it |

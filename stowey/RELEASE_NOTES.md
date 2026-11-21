@@ -18,9 +18,12 @@ Step 2 and 3 are needed once per download. They exist because this build is not 
 
 ## New in this build
 
-1. **The pill is real glass.** Smaller, translucent, and only the bars. It is dark in light mode and light in dark mode, so it stands out. Esc still cancels.
-2. **New sounds.** Low, soft and short. The higher note when it listens, the lower one when you let go.
-3. **It takes over from an older copy.** If an earlier build is still running, this one asks it to quit.
+1. **Fn and C copies your last dictation.** Press both, then paste wherever you like. It is the text exactly as it was typed. A soft sound confirms it. Change the keys under Settings, General.
+2. **The menu bar item does the same.** "Copy Last Transcript" now gives the typed text too.
+
+Good to know: macOS uses Fn and C for Control Centre. If both answer on your Mac, give the shortcut another pair of keys in Settings.
+
+Two keys for dictation: this was always there. Settings, General, click the dictation shortcut and press both keys together.
 
 Updating from an earlier build: drag the new one into Applications and replace the old one, then do steps 2 and 3 above once more. macOS will also ask for Accessibility again. Your settings, history and word file stay. If an app called Stowey Voice, without the mark, is still in Applications, move it to the Bin.
 

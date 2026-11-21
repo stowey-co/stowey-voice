@@ -162,6 +162,91 @@ jobs:
           cp "$HOME/Library/Logs/co.stowey.voice/handy.log" shots/handy.log 2>/dev/null || true
           ls -la shots
 
+      # The real app and a real key press: Fn and C has to put the last
+      # dictation on the clipboard. Twice, once with dictation on its own two
+      # keys and once with dictation on Fn alone, where the Fn of the shortcut
+      # sets a dictation off first. Nothing here can fail the build: what it
+      # finds is written down and read by a person.
+      - name: Press the copy shortcut
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          set +e
+          APP="$(ls -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/"*.app | head -1)"
+          DATA="$HOME/Library/Application Support/co.stowey.voice"
+          LOG="$HOME/Library/Logs/co.stowey.voice/handy.log"
+          mkdir -p shots
+          cat > press.swift <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+
+          // Fn down, C down, C up, Fn up, as fingers do it.
+          let source = CGEventSource(stateID: .hidSystemState)
+          func key(_ code: CGKeyCode, down: Bool, fn: Bool, modifier: Bool = false) {
+              guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else {
+                  print("could not make a key event")
+                  return
+              }
+              if modifier { event.type = .flagsChanged }
+              event.flags = fn ? .maskSecondaryFn : []
+              event.post(tap: .cghidEventTap)
+          }
+          key(63, down: true, fn: true, modifier: true)
+          usleep(150_000)
+          key(8, down: true, fn: true)
+          usleep(60_000)
+          key(8, down: false, fn: true)
+          usleep(60_000)
+          key(63, down: false, fn: false, modifier: true)
+          print("pressed Fn and C")
+          SWIFT
+          swiftc -O press.swift -o press 2> shots/keys-swift.txt || echo "could not build the key presser" | tee -a shots/keys.txt
+          sqlite3 "$DATA/history.db" "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text) VALUES ('stowey-test.wav', strftime('%s','now'), 0, 'Test', 'Stowey copy test 7341.');" \
+            || echo "could not write a test dictation into the history" | tee -a shots/keys.txt
+          for round in own-keys fn-alone; do
+            if [ "$round" = fn-alone ]; then
+              .stowey-venv/bin/python - "$DATA/settings_store.json" <<'PY' || echo "could not set dictation to Fn" | tee -a shots/keys.txt
+          import json, sys
+          path = sys.argv[1]
+          store = json.load(open(path))
+          store["settings"]["bindings"]["transcribe"]["current_binding"] = "fn"
+          json.dump(store, open(path, "w"))
+          print("dictation is on Fn alone now")
+          PY
+            fi
+            printf 'nothing copied' | pbcopy
+            LINES_BEFORE="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+            "$APP/Contents/MacOS/handy" > "shots/app-keys-$round.txt" 2>&1 &
+            PID=$!
+            sleep 12
+            screencapture -x "shots/screen-keys-$round-before.png" || true
+            ./press | tee -a shots/keys.txt || true
+            sleep 4
+            screencapture -x "shots/screen-keys-$round.png" || true
+            {
+              echo "== $round"
+              echo "clipboard: $(pbpaste)"
+              # macOS opens Control Centre on Fn and C, top right. Did it here?
+              .stowey-venv/bin/python - "shots/screen-keys-$round-before.png" "shots/screen-keys-$round.png" <<'PY' 2>&1
+          import sys
+          from PIL import Image, ImageChops
+          before, after = (Image.open(path).convert("RGB") for path in sys.argv[1:3])
+          w, h = before.size
+          corner = (w // 2, 0, w, h // 2)
+          change = ImageChops.difference(before.crop(corner), after.crop(corner)).convert("L")
+          changed = sum(1 for value in change.getdata() if value > 24)
+          print(f"top right quarter of the screen after the keys: {changed} of {(w - w // 2) * (h // 2)} pixels changed")
+          PY
+              echo "shortcuts in settings: $(.stowey-venv/bin/python -c 'import json,sys; b=json.load(open(sys.argv[1]))["settings"]["bindings"]; print({k: v["current_binding"] for k, v in b.items()})' "$DATA/settings_store.json" 2>&1)"
+              echo "log since the start of this round:"
+              tail -n "+$((LINES_BEFORE + 1))" "$LOG" 2>/dev/null | grep -v "Loaded settings" | grep -E "Stowey Voice|opied|Cancel|cancel|ecording|handy-keys event|icrophone|panic" | tail -40
+            } | tee -a shots/keys.txt
+            kill "$PID" 2>/dev/null || true
+            sleep 3
+          done
+          cp "$LOG" shots/handy.log 2>/dev/null || true
+          # An empty file cannot be attached to a release.
+          find shots -type f -size 0 -delete
+
       - name: Keep the photographs as a build artifact
         if: matrix.target == 'x86_64-apple-darwin'
         uses: actions/upload-artifact@v7
