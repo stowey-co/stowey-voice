@@ -609,6 +609,131 @@ def patch_pill() -> None:
         '#[cfg(target_os = "macos")]\nconst OVERLAY_BOTTOM_OFFSET: f64 = 15.0;',
         '#[cfg(target_os = "macos")]\nconst OVERLAY_BOTTOM_OFFSET: f64 = 1.0;',
     )
+    patch_pill_places(overlay)
+
+
+def patch_pill_places(overlay: Path) -> None:
+    """The pill shows on the screen of the window the user clicked into, and
+    can stand upright halfway up the left or right edge, chosen in Settings
+    next to top and bottom."""
+    # The screen of the focused window first, the mouse pointer after.
+    patch(
+        overlay,
+        "fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {\n",
+        "fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {\n"
+        "    if let Some(monitor) = crate::stowey::monitor_of_focus(app_handle) {\n"
+        "        return Some(monitor);\n"
+        "    }\n",
+    )
+    # Two more places to put it. Linux and Windows code is not built here.
+    settings = TAURI / "src" / "settings.rs"
+    patch(
+        settings,
+        '    #[serde(alias = "none")]\n    Bottom,\n}',
+        '    #[serde(alias = "none")]\n    Bottom,\n    Left,\n    Right,\n}',
+    )
+    patch(
+        TAURI / "src" / "shortcut" / "mod.rs",
+        '        "top" => OverlayPosition::Top,\n',
+        '        "top" => OverlayPosition::Top,\n'
+        '        "left" => OverlayPosition::Left,\n'
+        '        "right" => OverlayPosition::Right,\n',
+    )
+    # Upright, the window is tall and narrow.
+    patch(
+        overlay,
+        "fn overlay_dimensions(state: &str) -> (f64, f64) {\n",
+        "fn overlay_dimensions(state: &str) -> (f64, f64) {\n"
+        "    if let Some(size) = crate::stowey::overlay_size(state) {\n"
+        "        return size;\n"
+        "    }\n",
+    )
+    patch(
+        overlay,
+        "    let x = monitor_x + (monitor_width - width) / 2.0;\n"
+        "    let y = match settings.overlay_position {\n"
+        "        OverlayPosition::Top => monitor_y + OVERLAY_TOP_OFFSET,\n",
+        "    if let Some(spot) =\n"
+        "        crate::stowey::side_position(&monitor, settings.overlay_position, width, height)\n"
+        "    {\n"
+        "        return Some(spot);\n"
+        "    }\n"
+        "    let x = monitor_x + (monitor_width - width) / 2.0;\n"
+        "    let y = match settings.overlay_position {\n"
+        "        OverlayPosition::Top => monitor_y + OVERLAY_TOP_OFFSET,\n"
+        "        // Placed by side_position above.\n"
+        "        OverlayPosition::Left | OverlayPosition::Right => monitor_y + OVERLAY_TOP_OFFSET,\n",
+    )
+    # The web side: the type, the choice in Settings, and the pill's class.
+    patch(
+        SRC / "bindings.ts",
+        'export type OverlayPosition = "top" | "bottom"',
+        'export type OverlayPosition = "top" | "bottom" | "left" | "right"',
+    )
+    show = SRC / "components" / "settings" / "ShowOverlay.tsx"
+    patch(
+        show,
+        '        label: t("settings.advanced.overlay.position.options.top"),\n'
+        "      },\n"
+        "    ];\n",
+        '        label: t("settings.advanced.overlay.position.options.top"),\n'
+        "      },\n"
+        "      {\n"
+        '        value: "left",\n'
+        '        label: t("settings.advanced.overlay.position.options.left"),\n'
+        "      },\n"
+        "      {\n"
+        '        value: "right",\n'
+        '        label: t("settings.advanced.overlay.position.options.right"),\n'
+        "      },\n"
+        "    ];\n",
+    )
+    patch(
+        show,
+        "    const selectedPosition: OverlayPosition =\n"
+        '      getSetting("overlay_position") === "top" ? "top" : "bottom";\n',
+        '    const storedPosition = getSetting("overlay_position");\n'
+        "    const selectedPosition: OverlayPosition =\n"
+        '      storedPosition === "top" ||\n'
+        '      storedPosition === "left" ||\n'
+        '      storedPosition === "right"\n'
+        "        ? storedPosition\n"
+        '        : "bottom";\n',
+    )
+    # English only: every other language falls back to it.
+    patch(
+        SRC / "i18n" / "locales" / "en" / "translation.json",
+        '            "bottom": "Bottom",\n            "top": "Top"\n',
+        '            "bottom": "Bottom",\n            "top": "Top",\n'
+        '            "left": "Left Side",\n            "right": "Right Side"\n',
+    )
+    recording = SRC / "overlay" / "RecordingOverlay.tsx"
+    patch(
+        recording,
+        'const [position, setPosition] = useState<"top" | "bottom">("bottom");',
+        "const [position, setPosition] = useState<OverlayPosition>(\"bottom\");",
+    )
+    patch(
+        recording,
+        '              settings.data.overlay_position === "top" ? "top" : "bottom",\n',
+        '              settings.data.overlay_position ?? "bottom",\n',
+    )
+    patch(
+        recording,
+        "import type {\n  Notice,\n  StreamPhase,\n",
+        "import type {\n  Notice,\n  OverlayPosition,\n  StreamPhase,\n",
+    )
+    # Livelier bars: they follow the voice faster and reach further.
+    patch(
+        recording,
+        "          return prev * 0.7 + target * 0.3;\n",
+        "          return prev * 0.45 + target * 0.55;\n",
+    )
+    patch(
+        recording,
+        "            height: `${Math.max(3, Math.min(18, 3 + Math.pow(v, 0.7) * 15))}px`,\n",
+        "            height: `${Math.max(3, Math.min(18, 3 + Math.pow(v, 0.6) * 18))}px`,\n",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -132,6 +132,52 @@
   --ov-base-h: 30px;
 }
 
+/* Upright on the left or right edge, halfway up: 24 wide, 88 high, the bars
+   lying on their side. `stowey.rs` gives the window its tall, narrow size and
+   puts it there. A notice has words, so it keeps the flat form. */
+.ov-stage.left,
+.ov-stage.right {
+  align-items: center;
+}
+.ov-stage.left {
+  justify-content: flex-start;
+}
+.ov-stage.right {
+  justify-content: flex-end;
+}
+.ov-stage.left .scard.compact,
+.ov-stage.right .scard.compact {
+  margin-bottom: 0;
+}
+.ov-stage.left .scard.compact {
+  margin-left: 14px;
+  transform-origin: left center;
+}
+.ov-stage.right .scard.compact {
+  margin-right: 14px;
+  transform-origin: right center;
+}
+.ov-stage.left .scard.compact:not(.cnotice),
+.ov-stage.right .scard.compact:not(.cnotice) {
+  --ov-rest-w: 24px;
+  --ov-work-w: 24px;
+  --ov-base-h: 88px;
+}
+.ov-stage.left .scard.compact:not(.cnotice) .swave,
+.ov-stage.right .scard.compact:not(.cnotice) .swave {
+  width: max-content;
+  justify-self: center;
+  transform: rotate(90deg) scale(0.72);
+}
+
+/* Livelier bars: they follow the voice a little faster. */
+.swave i {
+  transition:
+    height 50ms linear,
+    background-color 180ms ease,
+    opacity 180ms ease;
+}
+
 .swave i,
 .sdot.ready {
   box-shadow: var(--g-halo);

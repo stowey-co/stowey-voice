@@ -26,9 +26,10 @@ function measure(): Frame {
   const stage = card.closest<HTMLElement>(".ov-stage");
   const fade = stage ? Number(getComputedStyle(stage).opacity) : 1;
   const alpha = Number(style.opacity) * fade;
+  // Upright on a side edge, the narrow side is the width.
   const radius = Math.min(
     parseFloat(style.borderTopLeftRadius) || 0,
-    box.height / 2,
+    Math.min(box.width, box.height) / 2,
   );
   return {
     x: box.left,

@@ -16,6 +16,7 @@
 
 use crate::audio_toolkit::chunking::{join_transcripts, Chunker as LongFormChunker, MakeScorer};
 use crate::audio_toolkit::vad::SpeechScorer;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const RATE: usize = 16_000;
 
@@ -406,19 +407,50 @@ fn mend(before: &mut String, after: &mut String) {
     }
 }
 
+/// Seams of the last dictation that still end a sentence after mending. Each
+/// may be a full stop where the speaker only stopped to think, which rules
+/// cannot tell apart from a real one. `stowey.rs` sends such a text to the
+/// cleanup model, which reads the meaning.
+static PAUSE_STOPS: AtomicUsize = AtomicUsize::new(0);
+
+/// Called when a dictation starts, so a short one decoded in one piece does
+/// not inherit the count of the one before.
+pub fn reset_pause_stops() {
+    PAUSE_STOPS.store(0, Ordering::Relaxed);
+}
+
+pub fn pause_stops() -> usize {
+    PAUSE_STOPS.load(Ordering::Relaxed)
+}
+
+fn ends_a_sentence(text: &str) -> bool {
+    text.trim_end().ends_with(['.', '?', '!'])
+}
+
 /// The chunks' texts as one text. Called in place of upstream's join, which
 /// still does the joining once the seams are mended.
 pub fn join<S: AsRef<str>>(texts: &[S]) -> String {
+    let (text, stops) = join_counting(texts);
+    PAUSE_STOPS.store(stops, Ordering::Relaxed);
+    text
+}
+
+/// The joined text, and how many seams still end a sentence.
+fn join_counting<S: AsRef<str>>(texts: &[S]) -> (String, usize) {
     let mut parts: Vec<String> = texts
         .iter()
         .map(|text| text.as_ref().trim().to_string())
         .filter(|text| !text.is_empty())
         .collect();
+    let mut stops = 0;
     for index in 1..parts.len() {
         let (head, tail) = parts.split_at_mut(index);
         mend(&mut head[index - 1], &mut tail[0]);
+        if ends_a_sentence(&head[index - 1]) {
+            stops += 1;
+        }
     }
-    join_transcripts(&parts)
+    (join_transcripts(&parts), stops)
 }
 
 #[cfg(test)]
@@ -663,5 +695,17 @@ mod tests {
         assert_eq!(join(&["One chunk only."]), "One chunk only.");
         assert_eq!(join(&["First.", "", "  ", "Third."]), "First. Third.");
         assert_eq!(join::<&str>(&[]), "");
+    }
+
+    #[test]
+    fn full_stops_left_at_pauses_are_counted() {
+        // Mended seams are not counted, the ones only a reader can judge are.
+        assert_eq!(join_counting(&["I want to.", "Go to the market."]).1, 0);
+        assert_eq!(
+            join_counting(&["We ship on Friday.", "The invoice follows.", "Is that fine?"]).1,
+            2
+        );
+        assert_eq!(join_counting(&["One chunk only."]).1, 0);
+        assert_eq!(join_counting(&["No stop here", "Then more."]).1, 0);
     }
 }

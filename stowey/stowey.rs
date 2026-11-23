@@ -11,9 +11,10 @@
 //! 4. A deterministic house style gate that runs after the model: no dashes,
 //!    no exclamation marks. A model slips now and then. This does not.
 //! 5. Speed: the speech model loads at launch and stays loaded. The cleanup
-//!    model only runs where an editor earns its wait: in an email, or when
-//!    the speaker corrected themselves or dictated a list. Everything else
-//!    is tidied by rule and typed at once. Where the model does run, it is
+//!    model only runs where an editor earns its wait: in an email, when the
+//!    speaker corrected themselves or dictated a list, or when the live
+//!    decode left full stops at pauses. Everything else is tidied by rule
+//!    and typed at once. Where the model does run, it is
 //!    warmed up while the user is still speaking. The speech itself is
 //!    decoded during the dictation: see `stowey_live.rs`.
 //! 6. Vocabulary: Stowey's own names, the user's custom words and a private
@@ -26,7 +27,7 @@
 
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
-    get_settings, AppSettings, LLMPrompt, ModelUnloadTimeout, SoundTheme,
+    get_settings, AppSettings, LLMPrompt, ModelUnloadTimeout, OverlayPosition, SoundTheme,
     APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use std::path::PathBuf;
@@ -46,9 +47,9 @@ const PROMPT: &str = r#"You clean up dictated text. The user message is a raw sp
 ${context}
 
 1. Remove filler words, false starts and repeats. When the speaker corrects themselves, keep only the final version.
-2. Fix punctuation, capitalisation and obvious mishearings. ${vocabulary}
+2. The transcript was cut wherever the speaker paused to think, so a full stop and capital may stand in the middle of a sentence. Set sentence ends and commas by meaning, not by those full stops. Fix capitalisation and obvious mishearings. ${vocabulary}
 3. Keep the speaker's words, meaning and point of view. Do not paraphrase or translate.
-4. Lay it out for where it is going: short lines for chat, greeting and sign off on their own lines for email, a numbered list when the speaker lists items.
+4. When the speaker counts out points (one, two, three, or first, second, third), put the sentence that introduces them on its own line, then each point on a new line numbered 1. 2. 3. For email, greeting and sign off go on their own lines.
 5. British English. No exclamation marks. No dashes of any kind: use a comma or a new sentence. Codes, numbers and URLs stay as they are.
 
 Transcript:
@@ -244,7 +245,8 @@ pub fn default_selected_prompt_id() -> Option<String> {
 }
 
 /// Bump when `seed` changes. An install applies each version once.
-const SEED_VERSION: u32 = 3;
+/// Version 4 only brings the prompt that reads pauses and lays out lists.
+const SEED_VERSION: u32 = 4;
 const SEED_FILE: &str = "stowey-seed";
 static SEEDED: AtomicBool = AtomicBool::new(false);
 
@@ -385,7 +387,12 @@ mod ax {
             value: *mut CFTypeRef,
         ) -> i32;
         fn AXUIElementSetMessagingTimeout(element: CFTypeRef, timeout_in_seconds: f32) -> i32;
+        fn AXValueGetValue(value: CFTypeRef, the_type: u32, value_ptr: *mut c_void) -> u8;
     }
+
+    /// `kAXValueTypeCGPoint` and `kAXValueTypeCGSize`.
+    const POINT: u32 = 1;
+    const SIZE: u32 = 2;
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
@@ -459,6 +466,39 @@ mod ax {
         }
     }
 
+    /// A point or a size, both two doubles.
+    #[repr(C)]
+    #[derive(Default)]
+    struct Pair {
+        first: f64,
+        second: f64,
+    }
+
+    fn pair(element: CFTypeRef, name: &str, kind: u32) -> Option<(f64, f64)> {
+        let value = copy_attribute(element, name)?;
+        let mut out = Pair::default();
+        let ok =
+            unsafe { AXValueGetValue(value.0, kind, &mut out as *mut Pair as *mut c_void) };
+        (ok != 0).then_some((out.first, out.second))
+    }
+
+    /// The centre of the window that has keyboard focus, in points from the
+    /// top left corner of the main screen, the space every screen shares.
+    pub fn focused_window_centre() -> Option<(f64, f64)> {
+        let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+        if system.0.is_null() {
+            return None;
+        }
+        unsafe { AXUIElementSetMessagingTimeout(system.0, TIMEOUT_SECONDS) };
+        let app = copy_attribute(system.0, "AXFocusedApplication")?;
+        unsafe { AXUIElementSetMessagingTimeout(app.0, TIMEOUT_SECONDS) };
+        let window = copy_attribute(app.0, "AXFocusedWindow")?;
+        unsafe { AXUIElementSetMessagingTimeout(window.0, TIMEOUT_SECONDS) };
+        let (x, y) = pair(window.0, "AXPosition", POINT)?;
+        let (width, height) = pair(window.0, "AXSize", SIZE)?;
+        Some((x + width / 2.0, y + height / 2.0))
+    }
+
     /// (app name, window title) of whatever has keyboard focus.
     pub fn focus() -> (Option<String>, Option<String>) {
         let system = Owned(unsafe { AXUIElementCreateSystemWide() });
@@ -521,6 +561,117 @@ pub fn focus() -> (Option<String>, Option<String>) {
     {
         (None, None)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Where the pill goes
+// ---------------------------------------------------------------------------
+
+/// A screen or a work area in points: x, y, width, height.
+type Area = (f64, f64, f64, f64);
+
+fn logical_area(position: (i32, i32), size: (u32, u32), scale: f64) -> Area {
+    (
+        position.0 as f64 / scale,
+        position.1 as f64 / scale,
+        size.0 as f64 / scale,
+        size.1 as f64 / scale,
+    )
+}
+
+fn holds(area: Area, point: (f64, f64)) -> bool {
+    point.0 >= area.0 && point.0 < area.0 + area.2 && point.1 >= area.1 && point.1 < area.1 + area.3
+}
+
+/// The screen of the window the user clicked into, so the pill shows where
+/// they are working. Upstream follows the mouse pointer, which can sit on
+/// another screen than the text. None leaves it to upstream's pointer rule.
+pub fn monitor_of_focus(app: &AppHandle) -> Option<tauri::Monitor> {
+    #[cfg(target_os = "macos")]
+    {
+        let centre = ax::focused_window_centre()?;
+        let monitor = app.available_monitors().ok()?.into_iter().find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            let area = logical_area(
+                (position.x, position.y),
+                (size.width, size.height),
+                monitor.scale_factor(),
+            );
+            holds(area, centre)
+        });
+        log::debug!(
+            "Stowey Voice: pill follows the focused window at {:.0}, {:.0}: {}",
+            centre.0,
+            centre.1,
+            monitor
+                .as_ref()
+                .and_then(|monitor| monitor.name().cloned())
+                .unwrap_or_else(|| "no screen holds it".to_string())
+        );
+        monitor
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+/// The pill stands upright on the left or right edge.
+fn upright(position: OverlayPosition) -> bool {
+    matches!(position, OverlayPosition::Left | OverlayPosition::Right)
+}
+
+/// Size of the pill's window when it stands upright: the pill is 24 by 88,
+/// with 14 points beside it for its shadow and room above and below.
+const UPRIGHT_WINDOW: (f64, f64) = (52.0, 128.0);
+/// Gap between the window and the edge of the screen. The stylesheet adds 14,
+/// so the pill sits 15 from the edge, as it does at the bottom.
+const SIDE_OFFSET: f64 = 1.0;
+
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// The pill's window size for a state, when Stowey decides it. A notice has
+/// words in it and the live panel is wide, so both keep upstream's size.
+pub fn overlay_size(state: &str) -> Option<(f64, f64)> {
+    let app = APP.get()?;
+    let compact = matches!(state, "recording" | "transcribing" | "processing");
+    (compact && upright(get_settings(app).overlay_position)).then_some(UPRIGHT_WINDOW)
+}
+
+fn side_spot(area: Area, left: bool, width: f64, height: f64) -> (f64, f64) {
+    let x = if left {
+        area.0 + SIDE_OFFSET
+    } else {
+        area.0 + area.2 - width - SIDE_OFFSET
+    };
+    (x, area.1 + (area.3 - height) / 2.0)
+}
+
+/// Where the window goes on the left or right edge, halfway up the part of
+/// the screen the Dock and the menu bar leave free. None for top and bottom.
+pub fn side_position(
+    monitor: &tauri::Monitor,
+    position: OverlayPosition,
+    width: f64,
+    height: f64,
+) -> Option<(f64, f64)> {
+    if !upright(position) {
+        return None;
+    }
+    let work = monitor.work_area();
+    let area = logical_area(
+        (work.position.x, work.position.y),
+        (work.size.width, work.size.height),
+        monitor.scale_factor(),
+    );
+    Some(side_spot(
+        area,
+        position == OverlayPosition::Left,
+        width,
+        height,
+    ))
 }
 
 /// Terminals and code editors. Dashes are syntax there, so the gate stays out.
@@ -596,8 +747,9 @@ fn context_line(app: Option<&str>, window: Option<&str>) -> String {
 /// text gets, and whether a model is worth waiting for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Destination {
-    /// A chat with an AI model. The reader copes with spoken language, so
-    /// nothing is worth a wait here.
+    /// A chat with an AI model. The reader copes with spoken language, so a
+    /// short plain dictation goes out at once. A long one with pauses in it,
+    /// or a list, still gets the model: the founder wants it structured.
     AiChat,
     /// An email. Greeting, paragraphs and sign off matter, so the cleanup
     /// model always gets a look.
@@ -815,20 +967,43 @@ const LAYOUT: [&str; 8] = [
 ];
 
 /// A list being counted out needs one of each.
-const FIRSTS: [&str; 5] = [
+const FIRSTS: [&str; 8] = [
     " first ",
     " firstly ",
     " number one ",
+    " point one ",
+    " one is ",
+    " one was ",
     " erstens ",
     " premièrement ",
 ];
-const SECONDS: [&str; 5] = [
+const SECONDS: [&str; 8] = [
     " second ",
     " secondly ",
     " number two ",
+    " point two ",
+    " two is ",
+    " two was ",
     " zweitens ",
     " deuxièmement ",
 ];
+
+/// A list announced before it starts: "we have three points".
+const LIST_COUNTS: [&str; 11] = [
+    "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "few", "several",
+];
+const LIST_NOUNS: [&str; 10] = [
+    "points", "things", "steps", "items", "reasons", "options", "questions", "topics", "ideas",
+    "issues",
+];
+
+fn announces_list(words: &[String]) -> bool {
+    words.windows(2).any(|pair| {
+        let count = pair[0].as_str();
+        let counts = LIST_COUNTS.contains(&count) || count.parse::<u32>().is_ok_and(|n| n >= 2);
+        counts && LIST_NOUNS.contains(&pair[1].as_str())
+    })
+}
 
 /// How a message opens when it will want its greeting on its own line.
 const GREETINGS: [&str; 9] = [
@@ -870,6 +1045,7 @@ fn needs_editor(text: &str) -> bool {
     let corrects = CORRECTIONS.iter().any(|cue| flat.contains(cue))
         || COMMA_CORRECTIONS.iter().any(|cue| lowered.contains(cue));
     let lays_out = LAYOUT.iter().any(|cue| flat.contains(cue))
+        || announces_list(&words)
         || (FIRSTS.iter().any(|cue| flat.contains(cue))
             && SECONDS.iter().any(|cue| flat.contains(cue)));
     let greets = words.len() >= 6
@@ -882,26 +1058,35 @@ fn needs_editor(text: &str) -> bool {
     hesitates || corrects || lays_out || greets || repeats
 }
 
-fn skips(transcription: &str, destination: Destination) -> bool {
+/// `pause_stops` is how many full stops the live decode left where the
+/// speaker paused, see `stowey_live.rs`.
+fn skips(transcription: &str, destination: Destination, pause_stops: usize) -> bool {
     if bare_words(transcription).len() < 4 {
         return true;
     }
     match destination {
-        Destination::AiChat | Destination::Code => true,
+        Destination::Code => true,
         Destination::Email => false,
-        Destination::Other => !needs_editor(transcription),
+        Destination::AiChat | Destination::Other => {
+            pause_stops == 0 && !needs_editor(transcription)
+        }
     }
 }
 
 /// True when the transcript goes out without the cleanup model.
 ///
-/// The model costs two to three seconds on a normal dictation, and most
-/// dictations hold nothing only a model can do. So it runs for an email, and
-/// for a text with a correction, a list or a hesitation in it. A chat with an
-/// AI, a terminal, and everything that reads cleanly as spoken is typed at
-/// once. `tidy` and the house style gate run either way.
+/// The model costs two to three seconds on a normal dictation. It runs for an
+/// email, for a text with a correction, a list or a hesitation in it, and for
+/// a text the live decode cut at pauses, whose full stops only a reader of
+/// the meaning can judge. A terminal or code editor, and a short dictation
+/// that reads cleanly as spoken, are typed at once. `tidy` and the house
+/// style gate run either way.
 pub fn skip_cleanup(transcription: &str) -> bool {
-    skips(transcription, destination())
+    skips(
+        transcription,
+        destination(),
+        crate::stowey_live::pause_stops(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,6 +1362,7 @@ pub fn preferred_microphone() -> Option<String> {
 /// dictation does not wait for it, then keeps an eye on the microphones and
 /// on the private word file.
 pub fn warm_start(app: &AppHandle) {
+    let _ = APP.set(app.clone());
     let app = app.clone();
     std::thread::spawn(move || {
         let settings = get_settings(&app);
@@ -1241,6 +1427,7 @@ pub fn prewarm(app: AppHandle) {
     if let Ok(mut slot) = DESTINATION.lock() {
         *slot = None;
     }
+    crate::stowey_live::reset_pause_stops();
     std::thread::spawn(move || {
         let (app_name, window) = focus();
         let destination = destination_of(app_name.as_deref(), window.as_deref());
@@ -1251,8 +1438,8 @@ pub fn prewarm(app: AppHandle) {
         if let Ok(mut slot) = WARM_CONTEXT.lock() {
             *slot = Some((Instant::now(), line.clone()));
         }
-        // No model will run for these, so there is nothing to warm.
-        if matches!(destination, Destination::AiChat | Destination::Code) {
+        // No model will run here, so there is nothing to warm.
+        if destination == Destination::Code {
             return;
         }
         let settings = get_settings(&app);
@@ -1809,7 +1996,7 @@ mod tests {
 
     #[test]
     fn clean_dictations_skip_the_model_at_any_length() {
-        let other = |text: &str| skips(text, Destination::Other);
+        let other = |text: &str| skips(text, Destination::Other, 0);
         assert!(other("Yes thanks"));
         assert!(other("  "));
         assert!(other("This is now a test from Stowey Voice."));
@@ -1827,7 +2014,7 @@ mod tests {
 
     #[test]
     fn anything_that_needs_an_editor_goes_to_the_model() {
-        let other = |text: &str| skips(text, Destination::Other);
+        let other = |text: &str| skips(text, Destination::Other, 0);
         // A hesitation, a repeat, corrections, a list, a layout, a greeting.
         assert!(!other("We deliver on, um, Friday or on Monday"));
         assert!(!other("Wir liefern, äh, am Freitag oder am Montag"));
@@ -1845,13 +2032,63 @@ mod tests {
     fn the_destination_decides_first() {
         let correction = "Ship it on Friday, no, on Monday morning";
         let plain = "Please send me the invoice for the last order";
-        // A model reads the chat, and a terminal takes it as spoken.
-        assert!(skips(correction, Destination::AiChat));
-        assert!(skips(correction, Destination::Code));
+        // A terminal takes it as spoken. A chat is edited like any other text.
+        assert!(skips(correction, Destination::Code, 0));
+        assert!(!skips(correction, Destination::AiChat, 0));
+        assert!(skips(plain, Destination::AiChat, 0));
         // An email is always edited, a short reply aside.
-        assert!(!skips(plain, Destination::Email));
-        assert!(skips("Sounds good thanks", Destination::Email));
-        assert!(skips(plain, Destination::Other));
+        assert!(!skips(plain, Destination::Email, 0));
+        assert!(skips("Sounds good thanks", Destination::Email, 0));
+        assert!(skips(plain, Destination::Other, 0));
+    }
+
+    #[test]
+    fn the_pill_finds_the_screen_of_the_focused_window() {
+        // A laptop at 2x with a second screen to its right, also at 2x.
+        let laptop = logical_area((0, 0), (3024, 1964), 2.0);
+        let display = logical_area((3024, -200), (5120, 2880), 2.0);
+        assert_eq!(display, (1512.0, -100.0, 2560.0, 1440.0));
+        let centre = (2600.0, 500.0);
+        assert!(!holds(laptop, centre));
+        assert!(holds(display, centre));
+        assert!(holds(laptop, (0.0, 0.0)));
+        assert!(!holds(laptop, (1512.0, 10.0)));
+    }
+
+    #[test]
+    fn the_upright_pill_sits_halfway_up_the_edge() {
+        let work = (0.0, 25.0, 1512.0, 900.0);
+        let (width, height) = UPRIGHT_WINDOW;
+        assert_eq!(side_spot(work, true, width, height), (1.0, 411.0));
+        assert_eq!(side_spot(work, false, width, height), (1459.0, 411.0));
+        // On a second screen the offsets carry over.
+        let second = (1512.0, -100.0, 2560.0, 1415.0);
+        assert_eq!(side_spot(second, true, width, height).0, 1513.0);
+        assert!(upright(OverlayPosition::Left));
+        assert!(upright(OverlayPosition::Right));
+        assert!(!upright(OverlayPosition::Bottom));
+        assert!(!upright(OverlayPosition::Top));
+    }
+
+    #[test]
+    fn full_stops_at_pauses_go_to_the_model() {
+        let paused = "So I was thinking. About the hooks for the fair. We could bring the navy ones";
+        assert!(!skips(paused, Destination::AiChat, 2));
+        assert!(!skips(paused, Destination::Other, 1));
+        // Never in a terminal, and never for a few words.
+        assert!(skips(paused, Destination::Code, 2));
+        assert!(skips("Yes. Thanks.", Destination::AiChat, 1));
+    }
+
+    #[test]
+    fn lists_counted_out_or_announced_go_to_the_model() {
+        let other = |text: &str| skips(text, Destination::AiChat, 0);
+        assert!(!other("All right, we have three points. One is pricing. Two is stock. Three is the fair"));
+        assert!(!other("There are two things to check before Friday, the boxes and the labels"));
+        assert!(!other("Point one the price, point two the delivery date"));
+        // A number with a noun that is no list, and counting without a list.
+        assert!(other("We sold three hooks to the shop on the corner today"));
+        assert!(other("The two of us will drive to the warehouse on Monday"));
     }
 
     fn microphone(id: &str, name: &str, is_default: bool) -> Microphone {
