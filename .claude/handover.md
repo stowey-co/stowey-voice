@@ -19,7 +19,7 @@ Stowey® Voice exists. It is a macOS dictation app, built from the open source a
 | Intel installer | https://github.com/stowey-co/stowey-voice/releases/latest/download/Stowey-Voice-intel.dmg |
 | Upstream | cjpais/Handy at release v0.10.1 |
 | Releases so far | `v0.10.1-stowey.2` and `.3` (first build), `.5` (speed and accuracy, commit 25c9ad8), `.6` (works while you talk, sounds, glass pill, commit 9423363), `.7` (the name Stowey® Voice, commit 8ee8315), `.8` (same app, first build made inside the organisation, commit 8d95bef), `.13` (the bare pill as real glass, the Felt sounds, takeover from an older copy, commit 3ee8990), `.15` (Fn and C copies the last dictation, commit e37070f), `.17` (pauses and lists structured, the pill on the working screen and on the sides, livelier bars, the latest). Number 4 was withdrawn and deleted before anyone installed it. Numbers 9 to 12, 14 and 16 were test builds on `try/` branches and were never released. On the founder's word, the prerelease and tag `photographs-16` and the branch `try/structure-and-pill` were deleted on 23 November 2026, once everything on them was in `main`. The release number is the run number, so it jumps |
-| Branches | `main` carries the releases. `try/glass` holds the four test commits of runs 9 to 12, and what it tried is in `main` since build 13. `stowey-overlay` is an old pointer, ten commits behind `main` with nothing of its own. Both can go on the founder's word |
+| Branches | `main` carries the releases and is the only branch. On the founder's word, `try/glass` (last commit 46378b2, the four test commits of runs 9 to 12, tried out and taken into `main` by build 13) and `stowey-overlay` (an old pointer with nothing of its own) were deleted on 24 November 2026. GitHub may keep 46378b2 reachable by its number for a while |
 | App name and identifier | Stowey® Voice, co.stowey.voice. Up to build 6 the name was Stowey Voice, without the mark |
 | Signing | Ad hoc. No Apple Developer account yet |
 
@@ -221,7 +221,7 @@ For build 15: 47 tests pass on GitHub's Mac, the 37 from before and 10 for the c
 14. **Design system.** Palette, typeface, name and marks follow Stowey's app UI system. Card radius, borders and layout are still Handy's. The glass pill is the one exception to that system's flat white cards, made on the founder's instruction. It stays monochrome: the glass takes a black or a white tint, never a colour.
 15. **Settings shows "Default" as the microphone while the app records from the built in one.** True to the stored setting, but not obvious. A line in the Settings screen would close it.
 16. **Session branches and test builds.** See Working in Claude Code: which way a cloud session gets a Mac build is not verified.
-17. **Leftovers.** The branches `try/glass` and `stowey-overlay`, and the two workflow steps that share test files through a prerelease.
+17. **Leftovers.** The two workflow steps that share test files through a prerelease. The old branches are gone.
 18. **It is public.** A fork of a public repository is public. Nothing sensitive is in it. A private copy would cost GitHub Actions minutes at ten times the rate on Macs. Do not create a repository called `stowey-voice` under the personal account it came from: that would break the redirect the old links rely on.
 
 ## Standing risk
