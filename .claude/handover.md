@@ -1,0 +1,215 @@
+# Stowey® Voice handover
+
+**Flow 52 ID Digital Infrastructure. First shipped 19 November 2026. State as of 23 November 2026: build 15 is the latest release.**
+
+Read this before touching the repository. The short rules in `.claude/rules/stowey-voice.md` load at every session start. This file is the long record: what exists, why it is built this way, what is proven and what is open. Keep it current in the same commit as every change.
+
+This repository is public. The names of people, the name of the dictation app this one replaces and anyone's usage data are left out on purpose. Here that app is called the reference app, and the person who decides is called the founder. The private record sits with Stowey under 52 ID. Ask the founder when a decision needs it.
+
+---
+
+## State
+
+Stowey® Voice exists. It is a macOS dictation app, built from the open source app Handy (cjpais/Handy, MIT), and it is downloadable.
+
+| | |
+|---|---|
+| Repository | https://github.com/stowey-co/stowey-voice. A public fork, in the Stowey organisation since 19 November 2026. Before that it sat under a personal account, and the old links redirect |
+| Apple silicon installer | https://github.com/stowey-co/stowey-voice/releases/latest/download/Stowey-Voice-apple-silicon.dmg |
+| Intel installer | https://github.com/stowey-co/stowey-voice/releases/latest/download/Stowey-Voice-intel.dmg |
+| Upstream | cjpais/Handy at release v0.10.1 |
+| Releases so far | `v0.10.1-stowey.2` and `.3` (first build), `.5` (speed and accuracy, commit 25c9ad8), `.6` (works while you talk, sounds, glass pill, commit 9423363), `.7` (the name Stowey® Voice, commit 8ee8315), `.8` (same app, first build made inside the organisation, commit 8d95bef), `.13` (the bare pill as real glass, the Felt sounds, takeover from an older copy, commit 3ee8990), `.15` (Fn and C copies the last dictation, commit e37070f, the latest). Number 4 was withdrawn and deleted before anyone installed it. Numbers 9 to 12 and 14 were test builds on `try/` branches and were never released. The release number is the run number, so it jumps |
+| Branches | `main` carries the releases. `try/glass` holds the four test commits of runs 9 to 12, and what it tried is in `main` since build 13. `stowey-overlay` is an old pointer, ten commits behind `main` with nothing of its own. Both can go on the founder's word |
+| App name and identifier | Stowey® Voice, co.stowey.voice. Up to build 6 the name was Stowey Voice, without the mark |
+| Signing | Ad hoc. No Apple Developer account yet |
+
+**Decision history.** 19 November 2026, morning: build a fork. Midday: Handy already ships a cleanup layer, so the plan became configure first, fork later. Afternoon: the founder reversed that and asked for a finished, downloadable Stowey app on a par with the reference app, with the source on GitHub for the team. Evening: he used it, judged it slower and less accurate than the reference app, and build 5 answered that. Night: he called build 5 much better but still slow after release, and asked for sounds, live transcription and a glass pill. Build 6 answered that. Late night: he asked for the name Stowey® Voice and for the repository to move into the organisation. Build 7 carries the name. Build 8 was made in the new home to prove the pipeline still runs there. After midnight: he had heard the sounds of build 8 and seen its pill, and rejected both. The sounds were wrong and the glass was not glass: he meant translucent glass as Apple draws it on macOS 26, and a thinner pill. Three rounds of proposals followed, each a page he could click and listen to. He chose the bare pill and the sound pair called Felt, and asked for a pill that is always translucent and wears the opposite of the system: dark on a light Mac, light on a dark one. Build 13 answers that. 21 November: he asked for two keys to start a dictation, and for Fn with C to copy the last transcription. The first was already there: the dictation shortcut in Settings takes any combination. Build 15 adds the second. 23 November: development moves to Claude Code and this folder was added.
+
+## What it does beyond stock Handy
+
+1. Cleanup runs on the normal dictation shortcut from the first use. No second shortcut.
+2. **The speech is decoded while the user talks.** A live recording is cut at every pause of 350 ms and each piece goes to the speech model at once. At release only the words since the last pause are left. Upstream cuts nothing under 40 seconds.
+3. **The cleanup model runs only where an editor earns the wait:** an email, or a text with a correction, a list, a layout request, a hesitation or a repeat in it. Everything else is tidied by rule and typed at once.
+4. **Destinations.** The app name and window title in focus, read through the Accessibility API when the dictation starts, sort the text into AI chat, email, code or other. AI chat and code never wait for a model.
+5. **Tidy rules** take out a throat clearing "So", asides between commas such as "you know" and "like", and small words said twice. Deterministic, conservative, tested.
+6. A deterministic house style gate runs last: no dashes, no exclamation marks. Tokens with a digit, URLs, emails, paths, file names and command flags keep their characters. The gate stays out of terminals and code editors.
+7. **Vocabulary.** "Stowey" and "Chemaly" from the public code, the user's custom words, and a private word file per Mac all go to the speech model and into the cleanup prompt. The file also holds replacements, "said => written".
+8. **Microphone.** With no microphone chosen in Settings, the Mac's own microphone is used, as long as the lid is open.
+9. **Sounds.** One once the microphone is really recording, one on release. Both are drawn in code by `apply.py`, so no sound file is copied from anyone. The pair is Felt: one low soft note each, the F above middle C on press and the B flat below it on release.
+10. **The pill is real glass.** 88 by 24 points, bars only while listening, a spinner while working. macOS draws the glass itself, so the desktop shows through. It wears the opposite of the Mac's mode.
+11. **It takes over from an older copy.** At launch it asks any running app with the same identifier and a different place on disk to quit, and waits up to four seconds.
+12. **Fn and C copies the last dictation.** The text as it was typed goes on the clipboard, and the "done" sound confirms it. The keys are a shortcut like the others, changeable under Settings, General. The menu bar item "Copy Last Transcript" gives the same text.
+13. The speech model loads at launch and never unloads.
+14. The updater is forced off, so the app can never update itself into stock Handy.
+15. Name, identifier, icon, menu bar icons, in app marks, monochrome palette, Archivo, light theme by default. Handy's name, logo and mascot are not used (their README excludes them from the MIT grant).
+
+The cleanup model is Apple Intelligence on device by default. It needs Apple silicon, macOS 26 or newer, Apple Intelligence switched on. Without it everything else still works. Any other provider Handy supports can be chosen under Settings, Post Process.
+
+## What real use showed
+
+**The first dictation.** The founder said "This is now a test from Stowey Voice" and got "This is now a dust from the wee voice", and found it slow to start and slow to finish. The app log (`~/Library/Logs/co.stowey.voice/handy.log`) showed, on a recent Apple silicon Mac with the Qwen3 ASR 1.7B model:
+
+| Finding | Measured | Answer in build 5 |
+|---|---|---|
+| The microphone was a Bluetooth headset, opened at 24000 Hz, which is call mode | The log named the headset as the device opened. Upstream's own code comment says Bluetooth can take seconds to deliver audio | A Bluetooth default yields to the built in microphone, lid open |
+| The speech model got no vocabulary | `vocabulary=true, vocabulary_terms=0` | House vocabulary |
+| The cleanup model ran on every dictation, even one word | 1 to 2 s per dictation at one second log resolution, for outputs of 5 characters | Fast path, warmed session, shorter prompt |
+| Presses during cleanup were dropped | "Remembering press: pipeline busy", then forgotten after a 1.09 s hold | Follows from shorter cleanup |
+| The speech model loaded on the first key press and unloaded after 5 idle minutes | load 437 ms, first transcription 1.57 s against 0.25 to 0.60 s warm | Loads at launch, never unloads |
+| Transcription itself was already fast | 0.25 to 0.60 s warm | Left alone |
+| Typing the result | about 230 ms | Left alone |
+
+**Not measured, only reasoned:** how much of the wrong words came from the headset and how much from the model. If "test" still becomes "dust" on the built in microphone, the next move is a different speech model, not more prompt work.
+
+**A day of build 5 against a month of the reference app.** The founder's history in the reference app was read on his Mac, read only, and nothing but counts left it. Together with the Stowey® Voice log of the same day:
+
+| Finding | Measured |
+|---|---|
+| Reference app, release to text | median 0.45 s, 0.30 s under 13 words, 0.72 s over 80 words |
+| Build 5, release to text | 4 to 5 s on a normal dictation |
+| Of which the speech model | 1.5 to 2.3 s for 8 to 27 s of speech, and it only started at release |
+| Of which the cleanup model | 2 to 3 s, on three quarters of all dictations |
+| Length of a dictation | median 28 words, a quarter under 13, a tenth over 100 |
+| Where the text goes | mostly into an AI chat window, the rest into a browser |
+| Language | English, with a little German |
+| How much the reference app's cleanup changes | word for word the same in 29%, at least 95% the same in half |
+| What it removes most | so, like, yeah, basically, you know. And it turns number words into digits |
+| Microphone | the reference app used the Mac's own almost every time. Build 5 that day used the microphone of an external display, 440 to 500 ms to open, every time |
+| The speech model after a minute idle | about a second slower than right after another decode |
+
+**What followed from it.** The 12 word fast path of build 5 covered a quarter of the dictations, so the limit went and cues took its place. Most of the text is read by a model, so it needs no editor. The speech model had to start before release, not at it.
+
+**Not used yet.** The same history holds audio for about a thousand dictations, with the reference app's text beside each clip. That is a real test set for comparing speech models on one voice, and the honest way to settle "test" against "dust". It is private and stays on the founder's Mac. It never enters this repository.
+
+## Design rules learned so far
+
+- **House names are not written into the user's custom words.** For a speech model that takes no vocabulary, Handy matches custom words by sound (Soundex plus edit distance at threshold 0.18). By that measure "stay", "stow", "stew" and "study" all become "Stowey". The names are added at the point where vocabulary goes to a model that supports it, and nowhere else.
+- **The public repository holds no names of colleagues, customers or suppliers.** Only "Stowey" and "Chemaly" (already public as the account name). Tests use made up names. Everything else lives in the private word file. The founder can overrule this. It is his call, not Claude's.
+- **The private word file lives in the log folder,** `~/Library/Logs/co.stowey.voice/vocabulary.txt`, because that was the one folder of the app an assistant session on the Mac was allowed into. The app also reads it from its data folder. A watcher reads it again when it changes.
+- **The live chunker is its own file with its own tests,** `stowey/stowey_live.rs`, and takes the place of upstream's chunker by one changed import. A whole clip is marked as such and goes through upstream's chunker untouched. It only cuts at a pause it has watched for 350 ms, because the recorder keeps 450 ms of silence after speech and drops the rest: a longer pause cannot be seen while it happens. Silence left over after the last cut is counted and not decoded, since a speech model can answer silence with words.
+- **Seams are mended only where it is plain.** Each piece is decoded alone, so each ends with a full stop and starts with a capital. A piece ending on a word no sentence ends on, or starting with "and", "but", "because", is joined to its neighbour. A capital is only taken off an everyday word, never off what might be a name.
+- **Cues send text to the model, they never edit it.** Rules that edit are separate, few and conservative: `tidy`. "So far", "so that" and "So what?" stay.
+- **Switching Post Process off in Settings is the one switch** for the model, the tidy rules and the gate. Long form chunking off in Settings switches the live decode off.
+- **The microphone stays closed between dictations.** Upstream's lazy close would keep it open 30 s for about 0.1 s gained, with the orange indicator lit.
+- **Settings changes reach existing installs through `migrate`**, once per install and seed version, marker file `stowey-seed` in the app data folder. `seed` is told which version the install already has, and a setting the user can change is only set by the version that brought it: version 2 switched the sounds on and set the model to stay in memory, so an install already at 2 keeps whatever the user chose since. Version 3 only renames the prompt entry. Bump `SEED_VERSION` when `seed` changes, and gate every new setting on `applied`.
+- **The name carries the mark wherever a person reads it:** Finder, Dock, menu bar, window title, every text in the app, the release title. `NAME` in `apply.py` holds it. Four places keep the plain spelling on purpose. The `X-Title` HTTP header, because a header value must be ASCII and building one from the mark would crash the app (`PLAIN_NAME`). The installer file names and the repository name, so the links stay as they are. The log lines. The binary inside the app is still called `handy`, as upstream names it.
+- **A new name is a new app to Finder.** `Stowey® Voice.app` does not replace `Stowey Voice.app` in Applications. Both carry the identifier co.stowey.voice, so settings, history, logs and the word file carry over, but the old app has to be moved to the Bin by hand. It bit at once: the old app kept running, a second app with the same identifier does not start beside it, and the founder reported that the new sounds and the new pill were "not implemented". From build 13 the new copy asks the old one to quit. The old app in Applications still has to go to the Bin, or it starts again at login.
+- **The microphone choice uses upstream's clamshell variant**, the one that falls back to the system default without erasing the stored preference. A closed lid vetoes the built in microphone, since a closed MacBook switches it off in hardware.
+- **The pill's glass is native, the bars are web.** A web view in a transparent window cannot blur the desktop behind it, so builds 6 to 8 only drew a glass look and the founder rejected it. From build 13 a native view sits under the web view in the overlay panel: `NSGlassEffectView`, Apple's own glass, where the Mac has it (macOS 26), and `NSVisualEffectView`, a frosted view, before that. The web page measures the pill on every change and sends its frame, corner radius and opacity to the native side (`stoweyGlass.ts` to the command `stowey_glass`), which moves the glass under it. With no glass at all the pill falls back to a solid fill.
+- **The pill wears the opposite of the Mac, not of the app.** The founder said "the theme of the system, or of the app". The two differ: the app forces its own light theme, so the app's appearance and the web page's colour scheme always read light. The Mac's own mode is read from the user defaults key `AppleInterfaceStyle`, the native side answers every frame with "dark" or "light", and the page carries it as `data-pill`. Runs 9 and 10 read the app's theme and showed a dark pill in both modes: that is the mistake this rule records.
+- **How see through the glass is cannot be judged on the build machine.** GitHub's Macs are virtual and draw every glass flat, their own Dock included. Geometry, tone and presence can be photographed there. Translucency can only be judged on a real Mac. So the look has a tuning file that needs no new install: `~/Library/Logs/co.stowey.voice/pill.txt`, lines `glass = clear` or `glass = regular`, and `tint = 0` to `0.9`. The app reads it about once a second. Without the file the pill is Apple's clear glass with a tint of 0.2.
+- **Sounds are judged by ear, and the first two rounds missed.** The build 8 pair glided up to 1150 Hz and was rejected. Nine variations of it were rejected as all alike. A recording of the reference app's sounds showed why: they sit low, about 415 to 430 Hz on press and 240 to 285 Hz on release, and are short. The recording was used for its feel only, nothing of it was copied. Ask for a reference before a second round of proposals, not after.
+- **The copy shortcut goes through the coordinator, not around it.** The founder dictates on Fn alone. Fn and C therefore begins with the key that starts a dictation, and the recording is already running when C arrives. A shortcut that just copied would leave that recording on, and in the default hold or tap mode the short press would even lock it on, hands free. So the press is queued behind the dictation keys in `TranscriptionCoordinator` and judged against a settled state (`stowey_keys.rs`, `decide`): a recording begun under two seconds ago on a key the shortcut contains is dropped, then the copy happens. A longer one on a held key is left alone, because then the C is a slip in the middle of a dictation. A recording on other keys is none of its business. A dictation still being typed is waited for, and the copy takes that one.
+- **"Contains" is worked out from the two shortcuts,** not assumed (`sets_off`): every key of the dictation shortcut is also in the copy shortcut. Fn is in Fn and C. Option and Space is not. Whoever moves dictation to two keys of its own gets a copy shortcut with no side effect at all.
+- **The history is not what was typed.** Upstream saves the text as the models produced it, then the house style gate changes what is pasted. "Copy last" therefore takes the pasted text, kept in memory by the pipeline (`remember`), and only falls back to the history after a restart. The menu bar item was pointed at the same function, so both give the same text.
+- **Three patches reach into upstream's coordinator:** one more command in its queue, one arm in its loop, one public method. All three assert their anchors. They are the most fragile patches in the overlay, and the first place to look when a new Handy release breaks the build.
+
+## How the repository works: a thin overlay
+
+Upstream's files stay untouched in git. Stowey's changes are applied at build time.
+
+| Path | Role |
+|---|---|
+| `stowey/stowey.rs` | The native module: defaults, destinations, cleanup policy, tidy rules, prompt, vocabulary, microphone choice, gate, 24 tests |
+| `stowey/stowey_live.rs` | The live chunker and the joining of its pieces, 13 tests |
+| `stowey/stowey_keys.rs` | The shortcut that copies the last dictation and its decision what to do, 10 tests |
+| `stowey/pill.css` | The look of the pill: size, bars, spinner, and the tones for a dark and a light pill |
+| `stowey/stowey_glass.rs` | The two commands the pill calls, the takeover from an older copy, and the hidden switch that shows the pill for a photograph |
+| `stowey/stowey_mac.rs` | The AppKit side: the glass view, its look, the tuning file, the Mac's mode |
+| `stowey/stoweyGlass.ts` | Measures the pill in the web page and reports it to the native side |
+| `stowey/apply.py` | Patches a clean checkout, Rust and the Swift bridge, draws the sounds and icons. Every patch asserts its anchor, so an upstream change breaks the build loudly instead of silently shipping stock behaviour |
+| `stowey/RELEASE_NOTES.md` | The text of the next release. The workflow attaches it |
+| `.github/workflows/stowey-voice.yml` | Build, test, publish |
+| `README.md` | Download and install instructions, written for people and for their Claude |
+| `.claude/rules/stowey-voice.md` | The rules every Claude Code session starts with |
+| `.claude/handover.md` | This file |
+
+To take a new Handy release: sync the fork on GitHub, then run the workflow. A patch whose anchor moved fails by name. To change behaviour: edit `stowey/`, prove it, push.
+
+## Working in Claude Code
+
+From 23 November 2026 the work happens in Claude Code. Before that it ran in a cloud workspace that could not push, could not build and could not see a Mac. Much of this file was shaped by those limits.
+
+**Two kinds of session.**
+
+- A local session on a Mac can build and start the app. Look, sound and keys can be judged within minutes instead of after a build on GitHub. This is the way to work on anything a person sees, hears or presses.
+- A cloud session clones the repository onto a Linux machine. It cannot build or start the app. It edits `stowey/`, runs what runs without a Mac, pushes a branch and lets GitHub's Macs build.
+
+**Never patch the checkout you commit from.** `apply.py` changes 71 upstream files in place, adds six source files of its own and fills the folder `stowey/build/`, where it leaves the marker `.applied`. In the main checkout that is one careless `git add` away from a commit that breaks the overlay. Use two trees:
+
+1. Edit and commit in the main checkout, on a branch.
+2. Make a build tree once, beside it: `git worktree add --detach ../stowey-voice-build HEAD`.
+3. In the build tree: `bun install`, `python3 -m venv .stowey-venv`, `.stowey-venv/bin/pip install pillow`, `.stowey-venv/bin/python stowey/apply.py`, `bun run tauri icon stowey/build/app-icon.png`.
+4. Build there: `bun run tauri dev` for a running app, `bun run tauri build` for the installer. The tests are `cargo test --lib stowey`, run inside `src-tauri`.
+5. To bring a newer commit into the build tree: `git restore .`, `git clean -fd`, `git checkout --detach` with the commit, then the apply line and the icon line of step 3 again. `node_modules` and `src-tauri/target` survive, so the next build is short.
+
+The worktree of step 2, the apply line of step 3 and the reset of step 5 were run on Linux on 23 November 2026: the main checkout stayed clean, the reset left nothing behind, and the script applied again. **Nothing here has been run on a real Mac yet.** The first local session should prove the build, correct this section and write down how long a cold and a warm build take.
+
+**What a local build needs.** Upstream's `BUILD.md` names Rust, Bun and the Xcode Command Line Tools. GitHub's Macs have the full Xcode. Whether the command line tools alone can build the Swift bridge to Apple Intelligence is not known. A person has to approve each install on the Mac.
+
+**A local build and the installed app are the same app to macOS.** Both carry co.stowey.voice, so they share settings, history, logs and the word file, and starting one asks the other to quit. Each rebuild is signed ad hoc and can count as a new app for permissions: the Accessibility entry in System Settings may look switched on and no longer apply. Upstream's `BUILD.md` has the remedy, a reset of that one entry, here `tccutil reset Accessibility co.stowey.voice`, followed by a new approval by the person at the Mac. An Apple Developer account ends this.
+
+**Where to look on the Mac.** `~/Library/Logs/co.stowey.voice/handy.log` is the app log. `pill.txt` in the same folder tunes the glass. `vocabulary.txt` there is the private word file: read it only to debug, and never copy from it into the repository.
+
+**Getting a Mac build of a branch.** Three ways, and none of them releases anything: push it as `try/` plus a name, start the workflow by hand on it (`gh workflow run stowey-voice.yml --ref` plus the branch), or build locally. Which of the first two a cloud session is allowed to do is not verified. If a cloud session can only push its own session branch, add that pattern to `branches` in the workflow, together with the next real change so that no empty release is made.
+
+**What became simpler.** The earlier workspace could not reach GitHub's API, so test builds hand their installers and photographs out through a prerelease called `photographs-` plus the run number. With `gh` at hand a session can fetch build artifacts directly, and those two workflow steps could go. Not done yet.
+
+## Build pipeline, and what was learned the hard way
+
+- **GitHub's Apple silicon Macs were out of capacity.** Two runs were cancelled after 15 minutes in the queue without ever starting. The Intel Mac pool (`macos-26-intel`) picked jobs up within seconds.
+- So **both apps are built on Intel Macs.** Upstream only builds its Apple Intelligence bridge when the build machine itself is Apple silicon. `apply.py` patches `build.rs` so the bridge is built whenever the *target* is Apple silicon. Verified: the Apple silicon app built this way links FoundationModels and contains the real bridge, not the stub.
+- First cold build: Intel app 28 minutes, Apple silicon app 55 minutes. With the compile cache warm, about 20 minutes each.
+- **Packing the disk image fails now and then** (`bundle_dmg.sh`), with the app already built and signed. The build step retries up to three times.
+- **The workflow finds the built app by its place, not by its name,** so the name can change without touching the workflow. The mark in the bundle name, the disk image name and the volume name went through bundling and signing without trouble.
+- A release is attached as a **prerelease** and promoted to latest only when both installers exist and the module tests pass. The `latest/download` links can never point at a half finished release.
+- The nine workflows inherited from Handy are disabled on the fork, not deleted.
+- **The organisation restricts outside apps.** A tool that cannot push or start a build there needs its access approved by an owner of the organisation, in GitHub's own settings. Do not work around a refusal. Report it.
+- **History: commits without git.** Until 23 November 2026 the session could not push, and every commit went through a connector to GitHub's API. That is why the history shows one commit per build and no pull requests.
+- **Testing without a Mac:** `stowey.rs` can be compiled on Linux against small stand ins for `tauri`, `handy_recorder`, `log` and the settings types, with the macOS only code type checked by switching its `cfg` gates on. `stowey_live.rs` can be tested in a small cargo crate against upstream's real `chunking.rs`, so it is checked against the very code it stands in for. The pill can be rendered in Chromium from the real stylesheets. The Swift bridge can only be compiled by a Mac build. None of these harnesses is in the repository: rebuild them from this description when needed.
+- **Try branches.** A push to a branch named `try/` plus anything builds and tests like `main` but releases nothing. It attaches the test installers and the photographs to a prerelease called `photographs-` plus the run number. Delete that prerelease and its tag when done. Each try run uses up a run number.
+- **The build photographs the real app.** The Intel job starts the built app with the hidden switch `STOWEY_SHOW_PILL` (listening or working), sets a test wallpaper, and takes a screenshot in light and in dark mode, six in all, plus the app log. `STOWEY_GLASS` (regular, clear, frosted) and `STOWEY_TINT` override the look for one start. This runs on `main` too and adds about a minute and a half.
+- **AppKit code can be type checked on Linux.** A small crate with `objc2`, `objc2-foundation` and `objc2-app-kit` at the versions the app uses, each with the feature `gnustep-2-1`, passes `cargo check` without an Apple target. It caught every wrong method name before a twenty minute build did.
+- **The build presses keys.** After the photographs the Intel job writes one test dictation into the history, starts the real app and has a small Swift program post Fn down, C down, C up, Fn up. It reads the clipboard back, and compares a screenshot from before with one from after to see whether a panel opened top right, where macOS puts Control Centre. Two rounds: dictation on its own two keys, then on Fn alone. The findings land in the job log and in `shots/keys.txt`. The build machine has no speech model, so a dictation never really starts there: the round on Fn alone proves the order of the events, not the dropping of a recording.
+- **The coordinator can be run for real on Linux.** Take the patched `transcription_coordinator.rs`, strip only the two derive macros of crates that are not there, and run its thread, its queue and its state machine against stand ins for the microphone, the pipeline and the clipboard. Nine timed scenarios drove the copy shortcut through it, next to upstream's own 37 coordinator tests. This is where the dropping of a recording was proven. That harness is not in the repository either.
+- **An empty file breaks `gh release upload`.** Run 14 failed at "Share the photographs" for that reason, after the app was built. The key press step now deletes empty files.
+- **Before believing a speed claim, read the log.** `~/Library/Logs/co.stowey.voice/handy.log` says which microphone opened and how fast, how many pieces were decoded while recording, how long the rest took, and whether the cleanup model ran.
+
+## Verified, and not verified
+
+Verified on GitHub's Macs up to build 8: 37 tests pass, including the Accessibility smoke test, and the whole patched app compiles without a warning from Stowey's code. For each release: bundle name and identifier, architecture, signature, the Stowey prompt present, upstream's updater endpoint absent, FoundationModels linked in the Apple silicon app. For build 7: the bundle name and display name read Stowey® Voice in both apps, the Intel app started on the build machine and printed the new name, and the downloaded Apple silicon installer was opened and read: volume, app and Info.plist all carry the name. For build 8: both installers built and signed, and the installer was downloaded through the new link and through the old one and both gave the same file, byte for byte.
+
+For build 13: 37 tests pass, both installers built and signed. The app was photographed on the build machine in six states: the pill is 88 by 24, sits where the old one sat, is dark with white bars on a light Mac and light with dark bars on a dark Mac, shows the spinner while working, and the frosted fallback draws. The two sounds inside the installer are byte for byte the Felt pair the founder chose on the preview page: 275 and 300 ms long, peak 9 and 7 dB under full scale.
+
+For build 15: 47 tests pass on GitHub's Mac, the 37 from before and 10 for the copy shortcut, and the patched app compiles without a warning from Stowey's code. On the build machine, macOS 26.6.1, the shortcut registered as Fn with C, a posted Fn and C reached the real app in both rounds, and the clipboard went from a marker text to the test dictation both times. No panel opened top right on that machine: of 518,400 pixels there, none changed in the first round and 2,483 in the second, which is the size of a menu bar icon and not of Control Centre. The released Apple silicon installer was downloaded and opened: the app carries the shortcut. On Linux the patched coordinator passed nine timed scenarios, among them: Fn and C on a Fn dictation key drops the recording and leaves nothing running, the same with a microphone that takes 400 ms to open, the same in toggle mode, a C three seconds into a dictation changes nothing, and a copy asked for while text is on its way waits and takes the new text.
+
+**First real use of build 8.** The log of one dictation of 43.8 s on the founder's Mac: decoded in nine pieces while he spoke, 0.54 s of speech left at release, text pasted under a second after release, microphone opened in 59 ms. He did not complain about speed again. He rejected the sounds and the pill, see the decision history.
+
+**Not verified for build 15.** Nobody has reported pressing Fn and C on a real keyboard. Whether macOS also opens Control Centre on it, on a real Mac with a real Globe key, is not known: the app swallows the keys it listens for, but the system may act first. What a real Fn dictation key feels like with it, start sound, pill flashing up, then the "done" sound, is not known either. The fix if it grates is two keys for dictation.
+
+**Not verified for build 13.** How see through the glass is on a real Mac: only a person at one can say, and the tuning file exists for that. The founder heard Felt in a browser, not in the app. The takeover has never met a real older copy. Apple's glass inside a panel that never becomes the active window has only been seen on a virtual Mac. Nobody has seen how the name with the mark looks in System Settings or in a notification. Whether cutting at pauses costs accuracy, and how often a seam is mended wrongly, can only be judged from real dictations. Read the log before believing any speed claim, including the ones in this document.
+
+## Open
+
+1. **Apple Developer account, $99 a year.** Without it every install needs System Settings, Privacy & Security, Open Anyway, and macOS asks for the Accessibility permission again after every update. Every tuning round and every local rebuild costs that ritual, so this is the most valuable open item. The founder's decision.
+2. **The local build is unproven.** See Working in Claude Code. The first local session closes it.
+3. **Fn and C against Control Centre.** macOS uses the same pair. If both answer on a real Mac, the default has to move to another pair, and that is a one line change in `stowey_keys.rs` (`DEFAULT_KEYS`) plus a word in the README.
+4. **Fn alone as the dictation key starts a recording on every Fn combination,** Fn and Backspace, Fn and an arrow, not only on Fn and C. The copy shortcut tidies up after itself. The others do not. Two keys for dictation solve it for one person. Solving it for everyone would mean dropping a just begun Fn recording whenever any other key follows, which needs a listener for all keys.
+5. **The copy shows nothing on screen.** Only the sound says it happened, and only if sounds are on. A short word in the pill would be the next step.
+6. **The glass is not signed off.** The founder has to look at it on his Mac. Expect one or two rounds through `pill.txt`, then write the values he settles on into `CLEAR` and `TINT` in `stowey/stowey_mac.rs` so every Mac gets them.
+7. **The pill follows the Mac's mode only at the next frame it reports.** It reads the mode whenever the pill moves or changes, which is every time it appears. A switch of mode while the pill is on screen only shows at the next change. Not seen as a problem, not tested.
+8. **Emails and corrected texts still wait 2 to 3 s for the cleanup model.** The reference app cleans in the cloud. Matching it there needs either a fast cloud model and an API key under Settings, Post Process, which ends "nothing leaves the Mac", or cleaning piece by piece during the dictation, which is the next engineering step. The first is a company decision, not an engineering one.
+9. **Number words.** The reference app turns "twenty five percent" into digits. Whether the speech model in use already does is not known. If not, it is a rule to add to `tidy`.
+10. **A speech model comparison on real audio,** see What real use showed.
+11. **Team machines.** Apple silicon or Intel, macOS version, Apple Intelligence on or off, for each Mac in the team. Decides who gets the cleanup model and who only the gate.
+12. **German.** The gate turns `E-Mail` into `E Mail`. That is the house rule applied literally. If it reads wrong in German, the gate needs a language switch.
+13. **The app icon is a drawn placeholder** (five bars on a black tile). Dropping a 1024 px PNG at `stowey/brand/app-icon.png` replaces it.
+14. **Design system.** Palette, typeface, name and marks follow Stowey's app UI system. Card radius, borders and layout are still Handy's. The glass pill is the one exception to that system's flat white cards, made on the founder's instruction. It stays monochrome: the glass takes a black or a white tint, never a colour.
+15. **Settings shows "Default" as the microphone while the app records from the built in one.** True to the stored setting, but not obvious. A line in the Settings screen would close it.
+16. **Session branches and test builds.** See Working in Claude Code: which way a cloud session gets a Mac build is not verified.
+17. **Leftovers.** The branches `try/glass` and `stowey-overlay`, and the two workflow steps that share test files through a prerelease.
+18. **It is public.** A fork of a public repository is public. Nothing sensitive is in it. A private copy would cost GitHub Actions minutes at ten times the rate on Macs. Do not create a repository called `stowey-voice` under the personal account it came from: that would break the redirect the old links rely on.
+
+## Standing risk
+
+This is a third rail in 52 ID with a bus factor of one, now with colleagues depending on it. The overlay design keeps the maintenance cost low, but someone still has to press sync when Handy ships a fix.
