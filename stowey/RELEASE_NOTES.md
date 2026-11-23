@@ -18,12 +18,15 @@ Step 2 and 3 are needed once per download. They exist because this build is not 
 
 ## New in this build
 
-1. **Fn and C copies your last dictation.** Press both, then paste wherever you like. It is the text exactly as it was typed. A soft sound confirms it. Change the keys under Settings, General.
-2. **The menu bar item does the same.** "Copy Last Transcript" now gives the typed text too.
+1. **Pauses no longer end your sentences.** When you stop to think, the text is read as a whole and the full stops go where your meaning ends. This now applies in AI chats too.
+2. **Lists come out as lists.** Say "we have three points, one is ..., two is ...", and the points arrive numbered, each on its own line.
+3. **The pill shows on the screen you are working on:** the one with the window you clicked into.
+4. **The pill can sit on the left or right edge**, standing upright, halfway up the screen. Settings, Advanced, Overlay Position.
+5. **The sound bars move a little more.**
 
-Good to know: macOS uses Fn and C for Control Centre. If both answer on your Mac, give the shortcut another pair of keys in Settings.
+Longer dictations now go through the cleanup model, so they take a moment longer to appear. Short, plain ones are still typed at once.
 
-Two keys for dictation: this was always there. Settings, General, click the dictation shortcut and press both keys together.
+Fn and C still copies your last dictation. If macOS opens Control Centre instead, give the shortcut another pair of keys under Settings, General.
 
 Updating from an earlier build: drag the new one into Applications and replace the old one, then do steps 2 and 3 above once more. macOS will also ask for Accessibility again. Your settings, history and word file stay. If an app called Stowey Voice, without the mark, is still in Applications, move it to the Bin.
 
