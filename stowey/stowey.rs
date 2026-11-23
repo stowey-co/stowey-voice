@@ -482,9 +482,10 @@ mod ax {
         (ok != 0).then_some((out.first, out.second))
     }
 
-    /// The centre of the window that has keyboard focus, in points from the
-    /// top left corner of the main screen, the space every screen shares.
-    pub fn focused_window_centre() -> Option<(f64, f64)> {
+    /// The window that has keyboard focus as x, y, width, height, in points
+    /// from the top left corner of the main screen, the space every screen
+    /// shares.
+    pub fn focused_window_frame() -> Option<(f64, f64, f64, f64)> {
         let system = Owned(unsafe { AXUIElementCreateSystemWide() });
         if system.0.is_null() {
             return None;
@@ -496,7 +497,7 @@ mod ax {
         unsafe { AXUIElementSetMessagingTimeout(window.0, TIMEOUT_SECONDS) };
         let (x, y) = pair(window.0, "AXPosition", POINT)?;
         let (width, height) = pair(window.0, "AXSize", SIZE)?;
-        Some((x + width / 2.0, y + height / 2.0))
+        Some((x, y, width, height))
     }
 
     /// (app name, window title) of whatever has keyboard focus.
@@ -583,27 +584,56 @@ fn holds(area: Area, point: (f64, f64)) -> bool {
     point.0 >= area.0 && point.0 < area.0 + area.2 && point.1 >= area.1 && point.1 < area.1 + area.3
 }
 
+fn overlap(a: Area, b: Area) -> f64 {
+    let width = (a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0);
+    let height = (a.1 + a.3).min(b.1 + b.3) - a.1.max(b.1);
+    width.max(0.0) * height.max(0.0)
+}
+
+/// Which screen a window is on: the one holding its centre, or, for a window
+/// straddling two screens of different heights, whose centre can fall on
+/// neither, the one holding most of it.
+fn screen_of(window: Area, screens: &[Area]) -> Option<usize> {
+    let centre = (window.0 + window.2 / 2.0, window.1 + window.3 / 2.0);
+    if let Some(index) = screens.iter().position(|&screen| holds(screen, centre)) {
+        return Some(index);
+    }
+    screens
+        .iter()
+        .enumerate()
+        .map(|(index, &screen)| (index, overlap(screen, window)))
+        .filter(|&(_, shared)| shared > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(index, _)| index)
+}
+
 /// The screen of the window the user clicked into, so the pill shows where
 /// they are working. Upstream follows the mouse pointer, which can sit on
 /// another screen than the text. None leaves it to upstream's pointer rule.
 pub fn monitor_of_focus(app: &AppHandle) -> Option<tauri::Monitor> {
     #[cfg(target_os = "macos")]
     {
-        let centre = ax::focused_window_centre()?;
-        let monitor = app.available_monitors().ok()?.into_iter().find(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            let area = logical_area(
-                (position.x, position.y),
-                (size.width, size.height),
-                monitor.scale_factor(),
-            );
-            holds(area, centre)
-        });
+        let window = ax::focused_window_frame()?;
+        let monitors = app.available_monitors().ok()?;
+        let screens: Vec<Area> = monitors
+            .iter()
+            .map(|monitor| {
+                let position = monitor.position();
+                let size = monitor.size();
+                logical_area(
+                    (position.x, position.y),
+                    (size.width, size.height),
+                    monitor.scale_factor(),
+                )
+            })
+            .collect();
+        let monitor = screen_of(window, &screens).map(|index| monitors[index].clone());
         log::debug!(
-            "Stowey Voice: pill follows the focused window at {:.0}, {:.0}: {}",
-            centre.0,
-            centre.1,
+            "Stowey Voice: pill follows the focused window at {:.0}, {:.0}, {:.0} by {:.0}: {}",
+            window.0,
+            window.1,
+            window.2,
+            window.3,
             monitor
                 .as_ref()
                 .and_then(|monitor| monitor.name().cloned())
@@ -2053,6 +2083,14 @@ mod tests {
         assert!(holds(display, centre));
         assert!(holds(laptop, (0.0, 0.0)));
         assert!(!holds(laptop, (1512.0, 10.0)));
+        let screens = [laptop, display];
+        assert_eq!(screen_of((2000.0, 200.0, 800.0, 600.0), &screens), Some(1));
+        assert_eq!(screen_of((100.0, 100.0, 800.0, 600.0), &screens), Some(0));
+        // Straddling both, centre below the laptop and left of the display:
+        // the display holds more of it.
+        assert_eq!(screen_of((1000.0, 800.0, 900.0, 500.0), &screens), Some(1));
+        // On no screen at all.
+        assert_eq!(screen_of((-5000.0, 0.0, 100.0, 100.0), &screens), None);
     }
 
     #[test]
